@@ -112,8 +112,6 @@ RUN --mount=type=bind,target=rust-toolchain.toml,src=rust-toolchain.toml \
     rustc --version && \
     cargo --version
 
-RUN cat /root/.rustup/settings.toml
-
 # Stage: Download uv
 FROM ghcr.io/astral-sh/uv:0.11.5@sha256:555ac94f9a22e656fc5f2ce5dfee13b04e94d099e46bb8dd3a73ec7263f2e484 AS uv
 # Stage: Base python image
