@@ -62,6 +62,7 @@ export abstract class Interface extends AKElement {
 
     public override connectedCallback(): void {
         super.connectedCallback();
+
         requestAnimationFrame(() => {
             this.commandPalette.modal.setCommands(
                 createCommonCommands().map((command) => ({
