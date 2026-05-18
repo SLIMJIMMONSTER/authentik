@@ -11,7 +11,10 @@ use url::Url;
 use crate::outpost::proxy::ProxyOutpost;
 
 use self::endpoint::{OIDCEndpoint, get_oidc_endpoint};
+use self::session::{CookieOptions, SameSite};
+use self::session_filesystem::FilesystemStore;
 
+pub(super) mod auth;
 pub(crate) mod endpoint;
 pub(super) mod handlers;
 pub(crate) mod oauth_state;
@@ -37,6 +40,11 @@ pub(super) struct Application {
     /// Compiled regexes from `skip_path_regex`; paths matching any of these
     /// bypass authentication.
     pub(super) unauthenticated_regex: Vec<Regex>,
+
+    /// Server-side session store.
+    pub(super) session_store: FilesystemStore,
+    /// Cookie options for the session cookie.
+    pub(super) cookie_options: CookieOptions,
 }
 
 impl Application {
@@ -107,6 +115,29 @@ impl Application {
         // Compile skip_path_regex
         let unauthenticated_regex = compile_skip_path_regex(provider.skip_path_regex.as_deref());
 
+        // Session store and cookie options.
+        // Go reference: getStore() in session.go
+        #[expect(
+            clippy::as_conversions,
+            clippy::cast_possible_truncation,
+            reason = "access_token_validity is always a small positive integer"
+        )]
+        let max_age = provider
+            .access_token_validity
+            .map(|v| v as i64 + 1)
+            .unwrap_or(0);
+        let session_store = FilesystemStore::new(std::env::temp_dir(), max_age)?;
+        let external_secure = external_url.scheme() == "https";
+        let cookie_options = CookieOptions {
+            name: session_name.clone(),
+            domain: provider.cookie_domain.clone().unwrap_or_default(),
+            path: "/".to_owned(),
+            secure: external_secure,
+            http_only: true,
+            same_site: SameSite::Lax,
+            max_age,
+        };
+
         let router = Router::new()
             // TODO: /start
             .route(
@@ -150,6 +181,8 @@ impl Application {
             session_name,
             outpost_name,
             unauthenticated_regex,
+            session_store,
+            cookie_options,
         })
     }
 
