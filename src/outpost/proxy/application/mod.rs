@@ -9,6 +9,7 @@ use url::Url;
 
 use crate::outpost::proxy::ProxyOutpost;
 
+pub(crate) mod endpoint;
 pub(super) mod handlers;
 pub(crate) mod types;
 
