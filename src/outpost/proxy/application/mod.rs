@@ -15,6 +15,7 @@ use self::endpoint::{OIDCEndpoint, get_oidc_endpoint};
 pub(crate) mod endpoint;
 pub(super) mod handlers;
 pub(crate) mod oauth_state;
+pub(crate) mod session;
 pub(crate) mod types;
 
 #[derive(Debug)]
