@@ -10,6 +10,7 @@ use url::Url;
 use crate::outpost::proxy::ProxyOutpost;
 
 pub(super) mod handlers;
+pub(crate) mod types;
 
 #[derive(Debug)]
 pub(super) struct Application {
