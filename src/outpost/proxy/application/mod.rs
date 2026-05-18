@@ -16,6 +16,7 @@ pub(crate) mod endpoint;
 pub(super) mod handlers;
 pub(crate) mod oauth_state;
 pub(crate) mod session;
+pub(crate) mod session_filesystem;
 pub(crate) mod types;
 
 #[derive(Debug)]
