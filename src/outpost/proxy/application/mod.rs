@@ -11,6 +11,7 @@ use crate::outpost::proxy::ProxyOutpost;
 
 pub(crate) mod endpoint;
 pub(super) mod handlers;
+pub(crate) mod oauth_state;
 pub(crate) mod types;
 
 #[derive(Debug)]
