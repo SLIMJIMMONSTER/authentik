@@ -10,6 +10,7 @@ use url::Url;
 
 use crate::outpost::proxy::ProxyOutpost;
 
+use self::auth::AuthHeaderCache;
 use self::endpoint::{OIDCEndpoint, get_oidc_endpoint};
 use self::session::{CookieOptions, SameSite};
 use self::session_filesystem::FilesystemStore;
@@ -50,6 +51,8 @@ pub(super) struct Application {
     pub(super) session_store: FilesystemStore,
     /// Cookie options for the session cookie.
     pub(super) cookie_options: CookieOptions,
+    /// In-memory TTL cache for Authorization header → Claims.
+    pub(super) auth_header_cache: AuthHeaderCache,
 }
 
 impl Application {
@@ -189,6 +192,7 @@ impl Application {
             http_client: outpost.controller.api_config.client.clone(),
             session_store,
             cookie_options,
+            auth_header_cache: AuthHeaderCache::new(),
         })
     }
 

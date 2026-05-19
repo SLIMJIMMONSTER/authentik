@@ -227,6 +227,7 @@ mod tests {
     }
 
     fn test_app_for_verification(secret: &str, issuer: &str, client_id: &str) -> Application {
+        use crate::outpost::proxy::application::auth::AuthHeaderCache;
         use crate::outpost::proxy::application::endpoint::OIDCEndpoint;
         use crate::outpost::proxy::application::session::{CookieOptions, SameSite};
         use crate::outpost::proxy::application::session_filesystem::FilesystemStore;
@@ -286,6 +287,7 @@ mod tests {
                 same_site: SameSite::Lax,
                 max_age: 3600,
             },
+            auth_header_cache: AuthHeaderCache::new(),
         }
     }
 
