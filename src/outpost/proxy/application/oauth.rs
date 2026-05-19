@@ -1,6 +1,8 @@
 use ak_client::models::ProxyMode;
-use axum::http::HeaderMap;
-use tracing::warn;
+use axum::http::{HeaderMap, StatusCode};
+use eyre::{Result, eyre};
+use serde::Deserialize;
+use tracing::{trace, warn};
 use url::Url;
 
 use super::Application;
@@ -9,6 +11,7 @@ use super::session::{
     SessionData, SessionStore as _, build_delete_cookie, build_set_cookie,
     session_id_from_cookies,
 };
+use super::types::{Claims, ProxyClaims};
 
 use crate::outpost::proxy::application::auth::generate_session_id;
 
@@ -140,7 +143,7 @@ impl Application {
         &self,
         headers: &HeaderMap,
         redirect: &str,
-    ) -> Result<AuthStartResult, axum::http::StatusCode> {
+    ) -> Result<AuthStartResult, StatusCode> {
         let client_id = self.provider.client_id.as_deref().unwrap_or_default();
         let cookie_secret = self.provider.cookie_secret.as_deref().unwrap_or_default();
 
@@ -165,7 +168,7 @@ impl Application {
                             .await
                             .map_err(|err| {
                                 warn!(?err, "failed to save new session");
-                                axum::http::StatusCode::BAD_REQUEST
+                                StatusCode::BAD_REQUEST
                             })?;
                         cookies.push(build_set_cookie(
                             &new_id,
@@ -187,7 +190,7 @@ impl Application {
                     .await
                     .map_err(|err| {
                         warn!(?err, "failed to save new session");
-                        axum::http::StatusCode::BAD_REQUEST
+                        StatusCode::BAD_REQUEST
                     })?;
                 cookies.push(build_set_cookie(
                     &new_id,
@@ -201,7 +204,7 @@ impl Application {
         let state = OAuthState::create(&session_id, redirect, client_id, cookie_secret)
             .map_err(|err| {
                 warn!(?err, "failed to create state JWT");
-                axum::http::StatusCode::BAD_REQUEST
+                StatusCode::BAD_REQUEST
             })?;
 
         let redirect_url = self.build_auth_code_url(&state);
@@ -343,6 +346,183 @@ impl Application {
             cookies,
         }
     }
+
+    /// Exchange the authorization code for tokens and extract claims.
+    ///
+    /// Posts `grant_type=authorization_code` to the token endpoint, then
+    /// verifies the returned access token (which is a JWT in authentik) and
+    /// extracts claims.
+    ///
+    /// Go reference: `redeemCallback` in `application/oauth_callback.go`.
+    pub(super) async fn redeem_callback(&self, callback_url: &Url) -> Result<Claims> {
+        let code = callback_url
+            .query_pairs()
+            .find(|(k, _)| k == "code")
+            .map(|(_, v)| v.into_owned())
+            .ok_or_else(|| eyre!("blank code"))?;
+
+        let client_id = self.provider.client_id.as_deref().unwrap_or_default();
+        let client_secret = self.provider.client_secret.as_deref().unwrap_or_default();
+
+        let res = self
+            .http_client
+            .post(&self.endpoint.token_url)
+            .form(&[
+                ("grant_type", "authorization_code"),
+                ("code", &code),
+                ("client_id", client_id),
+                ("client_secret", client_secret),
+                ("redirect_uri", &self.redirect_uri),
+            ])
+            .send()
+            .await?;
+
+        if res.status() != StatusCode::OK {
+            let body = res.text().await.unwrap_or_default();
+            return Err(eyre!("token exchange returned {}: {body}", body.len()));
+        }
+
+        #[derive(Deserialize)]
+        struct TokenExchangeResponse {
+            access_token: String,
+        }
+
+        let token_resp: TokenExchangeResponse = res.json().await?;
+
+        trace!("received access_token from code exchange");
+
+        // Verify the access token as a JWT (in authentik it's a signed JWT).
+        let mut claims = self
+            .verify_id_token(&token_resp.access_token)
+            .ok_or_else(|| eyre!("failed to verify access token from code exchange"))?;
+
+        if claims.ak_proxy.is_none() {
+            claims.ak_proxy = Some(ProxyClaims::default());
+        }
+        claims.raw_token = token_resp.access_token;
+
+        Ok(claims)
+    }
+
+    /// Handle the OAuth2 callback: validate state, exchange code, save claims,
+    /// and determine the redirect URL.
+    ///
+    /// Returns the redirect URL and any cookies to set on the response.
+    ///
+    /// Go reference: `handleAuthCallback` + `redirect` in
+    /// `application/oauth_callback.go` and `application/utils.go`.
+    pub(super) async fn handle_auth_callback(
+        &self,
+        headers: &HeaderMap,
+        callback_url: &Url,
+    ) -> CallbackResult {
+        let client_id = self.provider.client_id.as_deref().unwrap_or_default();
+        let cookie_secret = self.provider.cookie_secret.as_deref().unwrap_or_default();
+        let fallback_redirect = self.provider.external_host.clone();
+
+        // Get session ID
+        let session_id = match session_id_from_cookies(headers, &self.session_name) {
+            Some(id) => id,
+            None => {
+                warn!("no session cookie on callback");
+                return CallbackResult {
+                    redirect_url: fallback_redirect,
+                    cookies: Vec::new(),
+                };
+            }
+        };
+
+        // Validate state JWT
+        let state_jwt = callback_url
+            .query_pairs()
+            .find(|(k, _)| k == "state")
+            .map(|(_, v)| v.into_owned())
+            .unwrap_or_default();
+
+        let state =
+            match OAuthState::from_request(&state_jwt, &session_id, client_id, cookie_secret) {
+                Some(s) => s,
+                None => {
+                    warn!("invalid state");
+                    return CallbackResult {
+                        redirect_url: fallback_redirect,
+                        cookies: Vec::new(),
+                    };
+                }
+            };
+
+        // Exchange code for tokens
+        let claims = match self.redeem_callback(callback_url).await {
+            Ok(c) => c,
+            Err(err) => {
+                warn!(?err, "failed to redeem code");
+                let redirect = if state.redirect.is_empty() {
+                    fallback_redirect
+                } else {
+                    state.redirect
+                };
+                return CallbackResult {
+                    redirect_url: redirect,
+                    cookies: Vec::new(),
+                };
+            }
+        };
+
+        // Compute session max_age from token expiry
+        #[expect(
+            clippy::as_conversions,
+            clippy::cast_possible_truncation,
+            reason = "exp is a Unix timestamp, max_age is seconds — both fit in i64"
+        )]
+        let max_age = {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            (claims.exp - now).max(0)
+        };
+
+        // Save claims to session
+        let data = SessionData {
+            claims: Some(claims),
+            redirect: None,
+        };
+        let mut cookies = Vec::new();
+        if let Err(err) = self.session_store.save(&session_id, &data, max_age).await {
+            warn!(?err, "failed to save session after callback");
+            return CallbackResult {
+                redirect_url: fallback_redirect,
+                cookies: Vec::new(),
+            };
+        }
+        // Update session cookie max_age to match token expiry
+        cookies.push(build_set_cookie(
+            &session_id,
+            &self.cookie_options,
+            Some(max_age),
+        ));
+
+        let redirect = if state.redirect.is_empty() {
+            fallback_redirect
+        } else {
+            state.redirect
+        };
+        trace!(redirect, "callback complete, redirecting");
+
+        CallbackResult {
+            redirect_url: redirect,
+            cookies,
+        }
+    }
+}
+
+/// Result of [`Application::handle_auth_callback`].
+#[derive(Debug)]
+pub(super) struct CallbackResult {
+    /// URL to redirect the user to after callback processing.
+    pub(super) redirect_url: String,
+    /// `Set-Cookie` headers to include in the redirect response.
+    pub(super) cookies: Vec<String>,
 }
 
 #[cfg(test)]
@@ -620,6 +800,96 @@ mod tests {
         let loaded = app.session_store.load("sess-1").await.unwrap().unwrap();
         assert!(loaded.redirect.is_some());
         assert!(loaded.redirect.unwrap().contains("/target"));
+    }
+
+    // -- handle_auth_callback tests --
+
+    #[tokio::test]
+    async fn callback_no_session_cookie_redirects_to_fallback() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = test_app(dir.path(), ProxyMode::Proxy);
+
+        let headers = HeaderMap::new();
+        let callback_url =
+            Url::parse("https://app.example.com/outpost.goauthentik.io/callback?state=foo&code=bar")
+                .unwrap();
+
+        let result = app.handle_auth_callback(&headers, &callback_url).await;
+        assert_eq!(result.redirect_url, "https://app.example.com");
+        assert!(result.cookies.is_empty());
+    }
+
+    #[tokio::test]
+    async fn callback_invalid_state_redirects_to_fallback() {
+        init_crypto();
+        let dir = tempfile::tempdir().unwrap();
+        let app = test_app(dir.path(), ProxyMode::Proxy);
+
+        // Create a session
+        let data = SessionData {
+            claims: None,
+            redirect: None,
+        };
+        app.session_store
+            .save("cb-sess", &data, 3600)
+            .await
+            .unwrap();
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::COOKIE,
+            "authentik_proxy_test=cb-sess".parse().unwrap(),
+        );
+
+        let callback_url = Url::parse(
+            "https://app.example.com/outpost.goauthentik.io/callback?state=invalid-jwt&code=bar",
+        )
+        .unwrap();
+
+        let result = app.handle_auth_callback(&headers, &callback_url).await;
+        assert_eq!(result.redirect_url, "https://app.example.com");
+    }
+
+    #[tokio::test]
+    async fn callback_valid_state_but_no_code_exchange_redirects() {
+        init_crypto();
+        let dir = tempfile::tempdir().unwrap();
+        let app = test_app(dir.path(), ProxyMode::Proxy);
+
+        // Create a session
+        let data = SessionData {
+            claims: None,
+            redirect: None,
+        };
+        app.session_store
+            .save("cb-sess-2", &data, 3600)
+            .await
+            .unwrap();
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::COOKIE,
+            "authentik_proxy_test=cb-sess-2".parse().unwrap(),
+        );
+
+        // Create a valid state JWT
+        let state_jwt = OAuthState::create(
+            "cb-sess-2",
+            "https://app.example.com/original",
+            "my-client-id",
+            "cookie-signing-key",
+        )
+        .unwrap();
+
+        let callback_url = Url::parse(&format!(
+            "https://app.example.com/outpost.goauthentik.io/callback?state={state_jwt}&code=test-code"
+        ))
+        .unwrap();
+
+        // This will fail at the HTTP call (no real token endpoint), but should
+        // gracefully redirect to the state's redirect URL.
+        let result = app.handle_auth_callback(&headers, &callback_url).await;
+        assert_eq!(result.redirect_url, "https://app.example.com/original");
     }
 
     #[tokio::test]

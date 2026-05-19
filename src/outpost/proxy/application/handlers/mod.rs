@@ -103,12 +103,36 @@ pub(super) async fn handle_auth_start(
     }
 }
 
+/// `/outpost.goauthentik.io/callback` — OAuth2 callback handler.
+///
+/// Validates the state JWT, exchanges the authorization code for tokens,
+/// saves claims to the session, and redirects the user to their original URL.
+///
+/// Go reference: `handleAuthCallback` in `application/oauth_callback.go`.
 #[instrument(skip_all)]
 pub(super) async fn handle_auth_callback(
-    State(_app): State<Arc<Application>>,
-    _request: Request,
+    State(app): State<Arc<Application>>,
+    request: Request,
 ) -> Result<Response> {
-    todo!()
+    let callback_url = {
+        let uri = request.uri();
+        // Build a full URL from the request URI (it may be relative).
+        let base = url::Url::parse(&app.provider.external_host)
+            .unwrap_or_else(|_| url::Url::parse("https://localhost").expect("static URL"));
+        base.join(&uri.to_string()).unwrap_or(base)
+    };
+
+    let headers = request.headers();
+    let result = app.handle_auth_callback(headers, &callback_url).await;
+
+    let mut response = axum::response::Redirect::to(&result.redirect_url).into_response();
+    let resp_headers = response.headers_mut();
+    for cookie in &result.cookies {
+        if let Ok(val) = cookie.parse() {
+            resp_headers.append(SET_COOKIE, val);
+        }
+    }
+    Ok(response)
 }
 
 #[instrument(skip_all)]
