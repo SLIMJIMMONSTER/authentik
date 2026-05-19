@@ -135,10 +135,65 @@ pub(super) async fn handle_auth_callback(
     Ok(response)
 }
 
+/// `/outpost.goauthentik.io/sign_out` — sign out handler.
+///
+/// Deletes all sessions for the current user and redirects to the OIDC
+/// end-session endpoint. If no session exists, redirects to `/start`.
+///
+/// Go reference: `handleSignOut` in `application/application.go`.
 #[instrument(skip_all)]
 pub(super) async fn handle_sign_out(
-    State(_app): State<Arc<Application>>,
-    _request: Request,
+    State(app): State<Arc<Application>>,
+    request: Request,
 ) -> Result<Response> {
-    todo!()
+    use crate::outpost::proxy::application::oauth::SignOutResult;
+
+    let headers = request.headers();
+    let result = app.handle_sign_out(headers).await;
+
+    match result {
+        SignOutResult::Redirect {
+            redirect_url,
+            cookies,
+        } => {
+            let mut response =
+                axum::response::Redirect::to(&redirect_url).into_response();
+            let resp_headers = response.headers_mut();
+            for cookie in &cookies {
+                if let Ok(val) = cookie.parse() {
+                    resp_headers.append(SET_COOKIE, val);
+                }
+            }
+            Ok(response)
+        }
+        SignOutResult::NoSession => {
+            // No session — redirect to start to re-authenticate
+            let request_url = {
+                let uri = request.uri();
+                let base = url::Url::parse(&app.provider.external_host)
+                    .unwrap_or_else(|_| url::Url::parse("https://localhost").expect("static URL"));
+                base.join(&uri.to_string()).unwrap_or(base)
+            };
+            let result = app.redirect_to_start(headers, &request_url).await;
+            match result {
+                crate::outpost::proxy::application::oauth::RedirectToStartResult::Redirect {
+                    redirect_url,
+                    cookies,
+                } => {
+                    let mut response =
+                        axum::response::Redirect::to(&redirect_url).into_response();
+                    let resp_headers = response.headers_mut();
+                    for cookie in &cookies {
+                        if let Ok(val) = cookie.parse() {
+                            resp_headers.append(SET_COOKIE, val);
+                        }
+                    }
+                    Ok(response)
+                }
+                crate::outpost::proxy::application::oauth::RedirectToStartResult::Unauthorized => {
+                    Ok(StatusCode::UNAUTHORIZED.into_response())
+                }
+            }
+        }
+    }
 }

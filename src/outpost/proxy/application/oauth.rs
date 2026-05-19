@@ -514,6 +514,72 @@ impl Application {
             cookies,
         }
     }
+
+    /// Sign out: delete matching sessions and redirect to the OIDC end-session
+    /// endpoint.
+    ///
+    /// Returns [`SignOutResult::NoSession`] if there are no claims in the
+    /// current session (caller should redirect to start instead).
+    ///
+    /// Go reference: `handleSignOut` in `application/application.go`.
+    pub(super) async fn handle_sign_out(&self, headers: &HeaderMap) -> SignOutResult {
+        let (claims, delete_cookie) = self.get_claims_from_session(headers).await;
+
+        let mut cookies = Vec::new();
+        if delete_cookie {
+            cookies.push(build_delete_cookie(&self.cookie_options));
+        }
+
+        let Some(claims) = claims else {
+            return SignOutResult::NoSession;
+        };
+
+        // Build end-session redirect URL with id_token_hint
+        let mut redirect = self.endpoint.end_session.clone();
+        let mut end_session_url = Url::parse(&redirect).ok();
+        if let Some(ref mut u) = end_session_url {
+            u.query_pairs_mut()
+                .append_pair("id_token_hint", &claims.raw_token);
+            redirect = u.to_string();
+        } else {
+            // Fallback: append as query string manually
+            if redirect.contains('?') {
+                redirect.push_str(&format!("&id_token_hint={}", &claims.raw_token));
+            } else {
+                redirect.push_str(&format!("?id_token_hint={}", &claims.raw_token));
+            }
+        }
+
+        // Delete all sessions for this subject
+        let sub = claims.sub.clone();
+        if let Err(err) = self
+            .session_store
+            .delete_matching(&|c| c.sub == sub)
+            .await
+        {
+            warn!(?err, "failed to logout of other sessions");
+        }
+
+        // Also send a delete cookie for the current session
+        cookies.push(build_delete_cookie(&self.cookie_options));
+
+        SignOutResult::Redirect {
+            redirect_url: redirect,
+            cookies,
+        }
+    }
+}
+
+/// Result of [`Application::handle_sign_out`].
+#[derive(Debug)]
+pub(super) enum SignOutResult {
+    /// Redirect to the end-session endpoint (with id_token_hint).
+    Redirect {
+        redirect_url: String,
+        cookies: Vec<String>,
+    },
+    /// No claims in session — caller should redirect to start instead.
+    NoSession,
 }
 
 /// Result of [`Application::handle_auth_callback`].
@@ -917,5 +983,106 @@ mod tests {
             loaded.redirect.as_deref(),
             Some("https://app.example.com/original")
         );
+    }
+
+    // -- handle_sign_out tests --
+
+    fn make_headers_with_cookie(cookie_name: &str, session_id: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::COOKIE,
+            format!("{cookie_name}={session_id}").parse().unwrap(),
+        );
+        headers
+    }
+
+    #[tokio::test]
+    async fn sign_out_no_session_returns_no_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = test_app(dir.path(), ProxyMode::Proxy);
+
+        let headers = HeaderMap::new();
+        let result = app.handle_sign_out(&headers).await;
+        assert!(matches!(result, SignOutResult::NoSession));
+    }
+
+    #[tokio::test]
+    async fn sign_out_with_claims_redirects_to_end_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = test_app(dir.path(), ProxyMode::Proxy);
+        app.endpoint.end_session =
+            "https://auth.example.com/application/o/test/end-session/".to_owned();
+
+        let data = SessionData {
+            claims: Some(Claims {
+                sub: "user-1".to_owned(),
+                raw_token: "my-jwt-token".to_owned(),
+                ..Default::default()
+            }),
+            redirect: None,
+        };
+        app.session_store
+            .save("sign-out-sess", &data, 3600)
+            .await
+            .unwrap();
+
+        let headers = make_headers_with_cookie("authentik_proxy_test", "sign-out-sess");
+        let result = app.handle_sign_out(&headers).await;
+
+        match result {
+            SignOutResult::Redirect {
+                redirect_url,
+                cookies,
+            } => {
+                assert!(redirect_url.contains("end-session"));
+                assert!(redirect_url.contains("id_token_hint=my-jwt-token"));
+                assert!(!cookies.is_empty(), "should have delete cookie");
+                assert!(cookies.iter().any(|c| c.contains("Max-Age=-1")));
+            }
+            SignOutResult::NoSession => panic!("expected redirect"),
+        }
+    }
+
+    #[tokio::test]
+    async fn sign_out_deletes_matching_sessions() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = test_app(dir.path(), ProxyMode::Proxy);
+        app.endpoint.end_session = "https://auth.example.com/end-session/".to_owned();
+
+        // Create two sessions for the same sub
+        let data1 = SessionData {
+            claims: Some(Claims {
+                sub: "user-42".to_owned(),
+                ..Default::default()
+            }),
+            redirect: None,
+        };
+        let data2 = SessionData {
+            claims: Some(Claims {
+                sub: "user-42".to_owned(),
+                ..Default::default()
+            }),
+            redirect: None,
+        };
+        // And one for a different user
+        let data3 = SessionData {
+            claims: Some(Claims {
+                sub: "other-user".to_owned(),
+                ..Default::default()
+            }),
+            redirect: None,
+        };
+        app.session_store.save("s1", &data1, 3600).await.unwrap();
+        app.session_store.save("s2", &data2, 3600).await.unwrap();
+        app.session_store.save("s3", &data3, 3600).await.unwrap();
+
+        let headers = make_headers_with_cookie("authentik_proxy_test", "s1");
+        let _ = app.handle_sign_out(&headers).await;
+
+        // Both user-42 sessions should be deleted
+        assert!(app.session_store.load("s1").await.unwrap().is_none());
+        assert!(app.session_store.load("s2").await.unwrap().is_none());
+        // Other user's session should remain
+        assert!(app.session_store.load("s3").await.unwrap().is_some());
     }
 }
