@@ -7,10 +7,28 @@ use eyre::Result;
 use tracing::{trace, warn};
 
 use super::Application;
+use super::auth_basic::extract_basic_auth;
+use super::auth_bearer::extract_bearer_token;
 use super::session::{
     SessionData, SessionStore as _, build_set_cookie, session_id_from_cookies,
 };
 use super::types::Claims;
+
+/// Result of [`Application::check_auth`].
+///
+/// Bundles the claims (if authenticated) together with any response-side
+/// effects that the caller needs to apply (Set-Cookie, delete stale cookie).
+#[derive(Debug, Default)]
+pub(super) struct AuthResult {
+    /// Authenticated claims, or `None` if unauthenticated.
+    pub(super) claims: Option<Claims>,
+    /// A `Set-Cookie` header value to include in the response.
+    /// Present when a new session was created (bearer/basic auth path).
+    pub(super) set_cookie: Option<String>,
+    /// When `true`, the caller should send a delete-cookie header to clear
+    /// a stale session cookie from the client.
+    pub(super) delete_cookie: bool,
+}
 
 /// TTL for cached Authorization header → Claims mappings.
 const CACHE_TTL: Duration = Duration::from_secs(60);
@@ -68,6 +86,88 @@ impl AuthHeaderCache {
 }
 
 impl Application {
+    /// Main authentication decision tree.
+    ///
+    /// Tries each source in order:
+    /// 1. Session cookie
+    /// 2. Authorization header TTL cache
+    /// 3. Bearer token introspection
+    /// 4. Basic auth (client_credentials or delegated bearer)
+    ///
+    /// On success via bearer/basic, the claims are saved to the session and
+    /// cached. The caller must apply any `set_cookie` / `delete_cookie` from
+    /// the returned [`AuthResult`].
+    ///
+    /// Go reference: `checkAuth` in `application/auth.go`.
+    pub(super) async fn check_auth(&self, headers: &HeaderMap) -> AuthResult {
+        // 1. Session cookie
+        let (session_claims, delete_cookie) = self.get_claims_from_session(headers).await;
+        if let Some(claims) = session_claims {
+            return AuthResult {
+                claims: Some(claims),
+                ..Default::default()
+            };
+        }
+
+        // 2. TTL cache (Authorization header)
+        if let Some(claims) = self.get_claims_from_cache(headers) {
+            return AuthResult {
+                claims: Some(claims),
+                ..Default::default()
+            };
+        }
+
+        // 3. Bearer token introspection
+        if let Some(token) = extract_bearer_token(headers) {
+            trace!("checking bearer token");
+            if let Some(claims) = self.attempt_bearer_auth(&token).await {
+                return match self.save_and_cache_claims(headers, claims).await {
+                    Ok((claims, set_cookie)) => AuthResult {
+                        claims: Some(claims),
+                        set_cookie,
+                        delete_cookie: false,
+                    },
+                    Err(err) => {
+                        warn!(?err, "failed to save claims after bearer auth");
+                        AuthResult {
+                            delete_cookie,
+                            ..Default::default()
+                        }
+                    }
+                };
+            }
+            trace!("no/invalid bearer token");
+        }
+
+        // 4. Basic auth
+        if let Some((username, password)) = extract_basic_auth(headers) {
+            trace!("checking basic auth");
+            if let Some(claims) = self.attempt_basic_auth(&username, &password).await {
+                return match self.save_and_cache_claims(headers, claims).await {
+                    Ok((claims, set_cookie)) => AuthResult {
+                        claims: Some(claims),
+                        set_cookie,
+                        delete_cookie: false,
+                    },
+                    Err(err) => {
+                        warn!(?err, "failed to save claims after basic auth");
+                        AuthResult {
+                            delete_cookie,
+                            ..Default::default()
+                        }
+                    }
+                };
+            }
+            trace!("no/invalid basic auth");
+        }
+
+        // Nothing worked.
+        AuthResult {
+            delete_cookie,
+            ..Default::default()
+        }
+    }
+
     /// Load claims from the session identified by the request's session cookie.
     ///
     /// Returns `(Some(claims), false)` on success.
@@ -451,6 +551,109 @@ mod tests {
 
         let cached = app.auth_header_cache.get("Bearer my-token").unwrap();
         assert_eq!(cached.sub, "bearer-user");
+    }
+
+    // -- check_auth tests --
+
+    #[tokio::test]
+    async fn check_auth_returns_claims_from_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = FilesystemStore::new(dir.path().to_owned(), 3600).unwrap();
+
+        let data = SessionData {
+            claims: Some(Claims {
+                sub: "session-user".to_owned(),
+                ..Default::default()
+            }),
+            redirect: None,
+        };
+        store.save("sess-ok", &data, 3600).await.unwrap();
+
+        let app = test_app(dir.path(), "authentik_proxy_test");
+        let headers = make_headers("authentik_proxy_test", "sess-ok");
+
+        let result = app.check_auth(&headers).await;
+        assert_eq!(result.claims.unwrap().sub, "session-user");
+        assert!(!result.delete_cookie);
+        assert!(result.set_cookie.is_none());
+    }
+
+    #[tokio::test]
+    async fn check_auth_returns_claims_from_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = test_app(dir.path(), "authentik_proxy_test");
+
+        let claims = Claims {
+            sub: "cached-user".to_owned(),
+            ..Default::default()
+        };
+        app.auth_header_cache
+            .set("Bearer cached-tok".to_owned(), claims);
+
+        let mut headers = HeaderMap::new();
+        headers.insert(AUTHORIZATION, "Bearer cached-tok".parse().unwrap());
+
+        let result = app.check_auth(&headers).await;
+        assert_eq!(result.claims.unwrap().sub, "cached-user");
+        assert!(!result.delete_cookie);
+        assert!(result.set_cookie.is_none());
+    }
+
+    #[tokio::test]
+    async fn check_auth_returns_none_when_unauthenticated() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = test_app(dir.path(), "authentik_proxy_test");
+
+        let headers = HeaderMap::new();
+        let result = app.check_auth(&headers).await;
+
+        assert!(result.claims.is_none());
+        assert!(!result.delete_cookie);
+        assert!(result.set_cookie.is_none());
+    }
+
+    #[tokio::test]
+    async fn check_auth_signals_delete_for_stale_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = test_app(dir.path(), "authentik_proxy_test");
+
+        // Cookie references nonexistent session
+        let headers = make_headers("authentik_proxy_test", "gone");
+        let result = app.check_auth(&headers).await;
+
+        assert!(result.claims.is_none());
+        assert!(result.delete_cookie);
+    }
+
+    #[tokio::test]
+    async fn check_auth_prefers_session_over_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = FilesystemStore::new(dir.path().to_owned(), 3600).unwrap();
+
+        let data = SessionData {
+            claims: Some(Claims {
+                sub: "from-session".to_owned(),
+                ..Default::default()
+            }),
+            redirect: None,
+        };
+        store.save("sess-prio", &data, 3600).await.unwrap();
+
+        let app = test_app(dir.path(), "authentik_proxy_test");
+        // Also populate the cache with a different user
+        app.auth_header_cache.set(
+            "Bearer other-tok".to_owned(),
+            Claims {
+                sub: "from-cache".to_owned(),
+                ..Default::default()
+            },
+        );
+
+        let mut headers = make_headers("authentik_proxy_test", "sess-prio");
+        headers.insert(AUTHORIZATION, "Bearer other-tok".parse().unwrap());
+
+        let result = app.check_auth(&headers).await;
+        assert_eq!(result.claims.unwrap().sub, "from-session");
     }
 
     // -- generate_session_id tests --
