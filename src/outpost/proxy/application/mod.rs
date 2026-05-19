@@ -15,6 +15,7 @@ use self::session::{CookieOptions, SameSite};
 use self::session_filesystem::FilesystemStore;
 
 pub(super) mod auth;
+pub(super) mod auth_basic;
 pub(super) mod auth_bearer;
 pub(crate) mod endpoint;
 pub(super) mod handlers;
