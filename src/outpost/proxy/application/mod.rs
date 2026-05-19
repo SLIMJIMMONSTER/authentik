@@ -20,6 +20,7 @@ pub(super) mod auth_basic;
 pub(super) mod auth_bearer;
 pub(crate) mod endpoint;
 pub(super) mod handlers;
+pub(super) mod headers;
 pub(super) mod oauth;
 pub(crate) mod oauth_state;
 pub(crate) mod session;
