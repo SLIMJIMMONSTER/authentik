@@ -171,6 +171,7 @@ mod tests {
             session_name: session_name.to_owned(),
             outpost_name: "test-outpost".to_owned(),
             unauthenticated_regex: Vec::new(),
+            http_client: reqwest_middleware::ClientWithMiddleware::default(),
             session_store: FilesystemStore::new(store_dir.to_owned(), 3600).unwrap(),
             cookie_options: CookieOptions {
                 name: session_name.to_owned(),

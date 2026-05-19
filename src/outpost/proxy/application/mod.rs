@@ -15,6 +15,7 @@ use self::session::{CookieOptions, SameSite};
 use self::session_filesystem::FilesystemStore;
 
 pub(super) mod auth;
+pub(super) mod auth_bearer;
 pub(crate) mod endpoint;
 pub(super) mod handlers;
 pub(crate) mod oauth_state;
@@ -41,6 +42,9 @@ pub(super) struct Application {
     /// bypass authentication.
     pub(super) unauthenticated_regex: Vec<Regex>,
 
+    /// HTTP client for backchannel requests (token introspection, token exchange).
+    /// Reused from the outpost controller's API configuration.
+    pub(super) http_client: reqwest_middleware::ClientWithMiddleware,
     /// Server-side session store.
     pub(super) session_store: FilesystemStore,
     /// Cookie options for the session cookie.
@@ -181,6 +185,7 @@ impl Application {
             session_name,
             outpost_name,
             unauthenticated_regex,
+            http_client: outpost.controller.api_config.client.clone(),
             session_store,
             cookie_options,
         })

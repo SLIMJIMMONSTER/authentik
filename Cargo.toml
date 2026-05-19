@@ -295,6 +295,7 @@ jsonwebtoken.workspace = true
 metrics-exporter-prometheus.workspace = true
 metrics.workspace = true
 regex.workspace = true
+reqwest-middleware.workspace = true
 nix.workspace = true
 pyo3 = { workspace = true, optional = true }
 rand.workspace = true
