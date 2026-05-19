@@ -20,6 +20,7 @@ pub(super) mod auth_basic;
 pub(super) mod auth_bearer;
 pub(crate) mod endpoint;
 pub(super) mod handlers;
+pub(super) mod oauth;
 pub(crate) mod oauth_state;
 pub(crate) mod session;
 pub(crate) mod session_filesystem;
@@ -147,7 +148,10 @@ impl Application {
         };
 
         let router = Router::new()
-            // TODO: /start
+            .route(
+                "/outpost.goauthentik.io/start",
+                any(handlers::handle_auth_start),
+            )
             .route(
                 "/outpost.goauthentik.io/callback",
                 any(handlers::handle_auth_callback),

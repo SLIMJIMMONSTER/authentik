@@ -256,7 +256,7 @@ impl Application {
 }
 
 /// Generate a random session ID (32 hex characters).
-fn generate_session_id() -> String {
+pub(super) fn generate_session_id() -> String {
     use rand::RngExt as _;
     let bytes: [u8; 16] = rand::rng().random();
     bytes.iter().fold(String::with_capacity(32), |mut s, b| {

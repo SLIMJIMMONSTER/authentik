@@ -4,7 +4,8 @@ use std::{fmt, sync::Arc};
 use ak_axum::error::Result;
 use axum::{
     extract::{Query, Request, State},
-    response::Response,
+    http::{StatusCode, header::SET_COOKIE},
+    response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Deserializer};
 use tower::util::ServiceExt as _;
@@ -33,8 +34,8 @@ where
 
 #[derive(Deserialize)]
 struct Parameters {
-    // #[serde(rename = "rd", default, deserialize_with = "empty_string_as_none")]
-    // redirect: Option<String>,
+    #[serde(rename = "rd", default, deserialize_with = "empty_string_as_none")]
+    redirect: Option<String>,
     #[serde(
         rename = "X-authentik-auth-callback",
         default,
@@ -63,6 +64,43 @@ pub(crate) async fn handle(app: Arc<Application>, request: Request) -> Result<Re
     }
 
     Ok(app.router.clone().with_state(app).oneshot(request).await?)
+}
+
+/// `/outpost.goauthentik.io/start` — begin the OAuth2 authorization flow.
+///
+/// Reads `?rd=<url>` to determine where to redirect after authentication.
+/// Creates a state JWT and redirects to the authorization endpoint.
+///
+/// Go reference: `handleAuthStart` in `application/oauth.go`.
+#[instrument(skip_all)]
+pub(super) async fn handle_auth_start(
+    State(app): State<Arc<Application>>,
+    request: Request,
+) -> Result<Response> {
+    let query = Query::<Parameters>::try_from_uri(request.uri()).ok();
+    let rd = query
+        .as_ref()
+        .and_then(|q| q.redirect.as_deref())
+        .unwrap_or_default();
+
+    let redirect = app
+        .check_redirect_param(rd)
+        .unwrap_or_else(|| app.provider.external_host.clone());
+
+    let headers = request.headers();
+    match app.handle_auth_start(headers, &redirect).await {
+        Ok(result) => {
+            let mut response = axum::response::Redirect::to(&result.redirect_url).into_response();
+            let resp_headers = response.headers_mut();
+            for cookie in &result.cookies {
+                if let Ok(val) = cookie.parse() {
+                    resp_headers.append(SET_COOKIE, val);
+                }
+            }
+            Ok(response)
+        }
+        Err(status) => Ok(status.into_response()),
+    }
 }
 
 #[instrument(skip_all)]
