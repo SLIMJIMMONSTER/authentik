@@ -27,7 +27,7 @@ management, header injection, reverse proxying, forward-auth protocols) is stubb
 - [x] `Claims` and `ProxyClaims` structs (`types/claims.go`) → `src/outpost/proxy/application/types.rs`
 - [x] `OAuthState` struct for state JWT (`application/oauth_state.go`) → `src/outpost/proxy/application/oauth_state.rs`
 - [x] `OIDCEndpoint` struct with token introspection, end-session, JWKS URIs (`application/endpoint.go`) → `src/outpost/proxy/application/endpoint.rs`
-- [ ] `ErrorPageData` and error template rendering (`application/error.go`, `templates/`)
+- [x] `ErrorPageData` and error template rendering (`application/error.go`, `templates/`) → `application/error.rs` + `application/templates/error.html`
 
 ### Application Setup (Go: `application/application.go`)
 - [ ] OIDC configuration (key set, token verifier, oauth2 config)
@@ -38,7 +38,7 @@ management, header injection, reverse proxying, forward-auth protocols) is stubb
 - [x] OIDC endpoint resolution wired into Application::new → `application/mod.rs`
 - [x] Outpost name stored on Application → `application/mod.rs`
 - [ ] HTTP clients for upstream and public host (with host interception for embedded)
-- [ ] Error template loading
+- [x] Error template loading → `application/error.rs` (compile-time `include_str!`)
 
 ### Session Management (Go: `application/session.go`, `postgresstore/`, `filesystemstore/`)
 - [x] Session store abstraction (cookie-based sessions) → `application/session.rs`
@@ -122,8 +122,8 @@ management, header injection, reverse proxying, forward-auth protocols) is stubb
 - [x] Per-user backend override (`claims.Proxy.BackendOverride`) → `handlers/proxy.rs`
 - [x] Per-user host header override (`claims.Proxy.HostHeader`) → `handlers/proxy.rs`
 - [x] Response modification: set `X-Powered-By` → `handlers/proxy.rs`
-- [ ] Upstream timing metrics (`authentik_outpost_proxy_upstream_response_duration_seconds`)
-- [ ] Error handler with error page rendering (detailed for superusers)
+- [x] Upstream timing metrics (`authentik_outpost_proxy_upstream_response_duration_seconds`) → `handlers/proxy.rs`
+- [x] Error handler with error page rendering (detailed for superusers) → `application/error.rs`
 
 ### Misconfiguration Reporting (Go: `application/mode_common.go`)
 - [ ] `report_misconfiguration()` - POST configuration error event to authentik API
@@ -288,17 +288,20 @@ Added to `handlers/proxy.rs`:
 - Invalid backend_override URLs log a warning and fall back to default internal_host
 - 3 tests (backend override, host header override, invalid override fallback)
 
-**Step 26: Upstream timing metrics**
-Add the `authentik_outpost_proxy_upstream_response_duration_seconds` histogram. Record upstream
-response time with labels: outpost_name, method, scheme, host, upstream_host.
-Go reference: `internal/outpost/proxyv2/metrics/metrics.go`
+**Step 26: Upstream timing metrics** ✅
+Added `authentik_outpost_proxy_upstream_response_duration_seconds` histogram to `handlers/proxy.rs`.
+Records upstream response time with labels: outpost_name, method, scheme, host, upstream_host.
+Uses `Instant::now()` + `histogram!` macro from the `metrics` crate.
 
 ### Phase 9: Error Handling and Polish
 
-**Step 27: Error page template**
-Add an HTML error page template. Implement `error_page()` that renders detailed errors for
-superusers and generic "Failed to connect to backend." for regular users.
-Go reference: `internal/outpost/proxyv2/application/error.go`, `templates/`
+**Step 27: Error page template** ✅
+Implemented in `application/error.rs` + `application/templates/error.html`:
+- HTML template embedded at compile time via `include_str!`
+- `render_error_html()` with HTML escaping for XSS prevention
+- `Application::error_page()` — superusers see detailed error, regular users see "Failed to connect to backend."
+- Wired into proxy handler: upstream failures now return styled 502 error page
+- 7 tests (template rendering, XSS escaping, superuser/regular/no-claims/no-proxy-claims)
 
 **Step 28: Misconfiguration reporting**
 Implement `report_misconfiguration()` to POST a `configuration_error` event to the authentik

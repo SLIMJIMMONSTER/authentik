@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Instant;
 
 use ak_axum::error::Result;
 use axum::{
@@ -6,6 +7,7 @@ use axum::{
     http::{HeaderMap, StatusCode, header::SET_COOKIE},
     response::{IntoResponse, Response},
 };
+use metrics::histogram;
 use tracing::{instrument, trace, warn};
 use url::Url;
 
@@ -185,6 +187,7 @@ pub(crate) async fn handle(
     let upstream_body = reqwest::Body::wrap_stream(body_stream);
 
     // Build and send upstream request.
+    let method_str = method.to_string();
     let mut upstream_req = app
         .upstream_client
         .request(method, upstream_url.as_str());
@@ -193,13 +196,26 @@ pub(crate) async fn handle(
     }
     upstream_req = upstream_req.body(upstream_body);
 
+    // Time the upstream request for metrics.
+    // Go reference: mode_proxy.go records authentik_outpost_proxy_upstream_response_duration_seconds
+    let upstream_start = Instant::now();
     let upstream_resp = match upstream_req.send().await {
         Ok(r) => r,
         Err(err) => {
             warn!(?err, upstream = upstream_url.as_str(), "upstream request failed");
-            return Ok((StatusCode::BAD_GATEWAY, "Bad Gateway").into_response());
+            let detail = format!("Error proxying to upstream server: {err}");
+            return Ok(app.error_page(auth.claims.as_ref(), &detail));
         }
     };
+    histogram!(
+        "authentik_outpost_proxy_upstream_response_duration_seconds",
+        "outpost_name" => app.outpost_name.clone(),
+        "method" => method_str,
+        "scheme" => upstream_url.scheme().to_owned(),
+        "host" => original_host.to_owned(),
+        "upstream_host" => upstream_url.host_str().unwrap_or_default().to_owned(),
+    )
+    .record(upstream_start.elapsed().as_secs_f64());
 
     // Stream upstream response back to client.
     let status = upstream_resp.status();
