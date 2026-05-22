@@ -23,6 +23,7 @@ pub(crate) mod endpoint;
 pub(super) mod error;
 pub(super) mod handlers;
 pub(super) mod headers;
+pub(super) mod host_interceptor;
 pub(super) mod jwks;
 pub(super) mod misconfiguration;
 pub(super) mod oauth;
@@ -50,9 +51,15 @@ pub(super) struct Application {
     /// bypass authentication.
     pub(super) unauthenticated_regex: Vec<Regex>,
 
-    /// HTTP client for backchannel requests (token introspection, token exchange).
+    /// HTTP client for backchannel requests (JWKS fetch, etc.).
     /// Reused from the outpost controller's API configuration.
     pub(super) http_client: reqwest_middleware::ClientWithMiddleware,
+    /// HTTP client for public-facing token requests (token exchange, introspection,
+    /// basic auth). Wraps the base HTTP client with a host interceptor that
+    /// rewrites the `Host` header to match `authentik_host` / `AUTHENTIK_HOST_BROWSER`.
+    ///
+    /// Go reference: `publicHostHTTPClient` in `application/application.go`.
+    pub(super) public_http_client: reqwest_middleware::ClientWithMiddleware,
     /// Full API configuration for calling the authentik API (e.g. event creation).
     pub(super) api_config: ak_client::apis::configuration::Configuration,
     /// HTTP client for upstream proxy requests.
@@ -208,6 +215,23 @@ impl Application {
             outpost.controller.api_config.client.clone(),
         );
 
+        // Public HTTP client with host interception for token requests.
+        // Go reference: `NewHostInterceptor(c, tokenEndpointHost)` in application.go.
+        //
+        // When AUTHENTIK_HOST_BROWSER is set, use that; otherwise use authentik_host.
+        let token_endpoint_host = if host_browser.is_empty() {
+            authentik_host
+        } else {
+            &host_browser
+        };
+        let public_http_client = reqwest_middleware::ClientBuilder::from_client(
+            outpost.controller.api_config.client.clone(),
+        )
+        .with(host_interceptor::HostInterceptorMiddleware::from_url(
+            token_endpoint_host,
+        ))
+        .build();
+
         Ok(Self {
             host: external_host.to_owned(),
             provider,
@@ -219,6 +243,7 @@ impl Application {
             outpost_name,
             unauthenticated_regex,
             http_client: outpost.controller.api_config.client.clone(),
+            public_http_client,
             api_config: outpost.controller.api_config.clone(),
             upstream_client,
             session_store,

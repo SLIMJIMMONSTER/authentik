@@ -20,6 +20,7 @@ publish = false
 
 [workspace.dependencies]
 arc-swap = "= 1.9.1"
+async-trait = "= 0.1.89"
 base64 = "= 0.22.1"
 argh = "= 0.1.19"
 axum-server = { version = "= 0.8.0", features = ["tls-rustls-no-provider"] }
@@ -40,6 +41,7 @@ eyre = "= 0.6.12"
 forwarded-header-value = "= 0.1.1"
 futures = "= 0.3.32"
 glob = "= 0.3.3"
+http = "= 1.4.0"
 hyper-unix-socket = "= 0.6.1"
 hyper-util = "= 0.1.20"
 ipnet = { version = "= 2.12.0", features = ["serde"] }
@@ -282,6 +284,7 @@ pyo3-build-config.workspace = true
 ak-axum.workspace = true
 ak-client = { workspace = true, optional = true }
 ak-common.workspace = true
+async-trait.workspace = true
 aws-lc-rs.workspace = true
 arc-swap.workspace = true
 base64.workspace = true
@@ -291,6 +294,7 @@ axum.workspace = true
 color-eyre.workspace = true
 eyre.workspace = true
 futures.workspace = true
+http.workspace = true
 hyper-unix-socket.workspace = true
 hyper-util.workspace = true
 jsonwebtoken.workspace = true

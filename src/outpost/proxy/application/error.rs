@@ -137,6 +137,7 @@ mod tests {
             outpost_name: "my-outpost".to_owned(),
             unauthenticated_regex: Vec::new(),
             http_client: reqwest_middleware::ClientWithMiddleware::default(),
+            public_http_client: reqwest_middleware::ClientWithMiddleware::default(),
             api_config: ak_client::apis::configuration::Configuration::default(),
             upstream_client: reqwest::Client::new(),
             session_store: FilesystemStore::new(store_dir.to_owned(), 3600).unwrap(),

@@ -214,6 +214,7 @@ version = "2026.8.0-rc1"
 dependencies = [
  "arc-swap",
  "argh",
+ "async-trait",
  "authentik-axum",
  "authentik-client",
  "authentik-common",
@@ -224,6 +225,7 @@ dependencies = [
  "color-eyre",
  "eyre",
  "futures",
+ "http",
  "hyper-unix-socket",
  "hyper-util",
  "jsonwebtoken",

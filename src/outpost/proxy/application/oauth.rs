@@ -365,7 +365,7 @@ impl Application {
         let client_secret = self.provider.client_secret.as_deref().unwrap_or_default();
 
         let res = self
-            .http_client
+            .public_http_client
             .post(&self.endpoint.token_url)
             .form(&[
                 ("grant_type", "authorization_code"),
@@ -650,6 +650,7 @@ mod tests {
             outpost_name: "test-outpost".to_owned(),
             unauthenticated_regex: Vec::new(),
             http_client: reqwest_middleware::ClientWithMiddleware::default(),
+            public_http_client: reqwest_middleware::ClientWithMiddleware::default(),
             api_config: ak_client::apis::configuration::Configuration::default(),
             session_store: FilesystemStore::new(store_dir.to_owned(), 3600).unwrap(),
             cookie_options: CookieOptions {

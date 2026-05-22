@@ -48,7 +48,7 @@ impl Application {
         let client_secret = self.provider.client_secret.as_deref().unwrap_or_default();
 
         let res = self
-            .http_client
+            .public_http_client
             .post(&self.endpoint.token_introspection)
             .form(&[
                 ("client_id", client_id),

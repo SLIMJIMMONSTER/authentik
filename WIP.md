@@ -30,14 +30,14 @@ management, header injection, reverse proxying, forward-auth protocols) is stubb
 - [x] `ErrorPageData` and error template rendering (`application/error.go`, `templates/`) → `application/error.rs` + `application/templates/error.html`
 
 ### Application Setup (Go: `application/application.go`)
-- [ ] OIDC configuration (key set, token verifier, oauth2 config)
+- [x] OIDC configuration (key set, token verifier, oauth2 config) → key set: `application/jwks.rs`, token verifier: `verify_id_token` in `auth_basic.rs`, oauth2 config: provider fields + endpoint + redirect_uri
 - [x] Session name derivation (SHA256 of client ID, first 8 hex chars) → `application/mod.rs`
 - [x] Redirect URI construction → `application/mod.rs`
 - [x] `skip_path_regex` compilation into `unauthenticated_regex` → `application/mod.rs`
 - [x] `is_allowlisted(url)` check → `application/mod.rs`
 - [x] OIDC endpoint resolution wired into Application::new → `application/mod.rs`
 - [x] Outpost name stored on Application → `application/mod.rs`
-- [ ] HTTP clients for upstream and public host (with host interception for embedded)
+- [x] HTTP clients for upstream and public host (with host interception for embedded) → `application/host_interceptor.rs` `HostInterceptorMiddleware`, `public_http_client` on Application for token requests
 - [x] Error template loading → `application/error.rs` (compile-time `include_str!`)
 
 ### Session Management (Go: `application/session.go`, `postgresstore/`, `filesystemstore/`)
