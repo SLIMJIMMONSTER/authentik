@@ -12,6 +12,7 @@ use crate::outpost::proxy::ProxyOutpost;
 
 use self::auth::AuthHeaderCache;
 use self::endpoint::{OIDCEndpoint, get_oidc_endpoint};
+use self::jwks::RemoteJwksKeySet;
 use self::session::{CookieOptions, SameSite};
 use self::session_filesystem::FilesystemStore;
 
@@ -22,6 +23,7 @@ pub(crate) mod endpoint;
 pub(super) mod error;
 pub(super) mod handlers;
 pub(super) mod headers;
+pub(super) mod jwks;
 pub(super) mod misconfiguration;
 pub(super) mod oauth;
 pub(crate) mod oauth_state;
@@ -63,6 +65,8 @@ pub(super) struct Application {
     pub(super) cookie_options: CookieOptions,
     /// In-memory TTL cache for Authorization header → Claims.
     pub(super) auth_header_cache: AuthHeaderCache,
+    /// Remote JWKS key set for RS256 token verification.
+    pub(super) jwks_key_set: RemoteJwksKeySet,
 }
 
 impl Application {
@@ -199,6 +203,11 @@ impl Application {
             None => return Err(eyre!("no provider mode set")),
         };
 
+        let jwks_key_set = RemoteJwksKeySet::new(
+            endpoint.jwks_uri.clone(),
+            outpost.controller.api_config.client.clone(),
+        );
+
         Ok(Self {
             host: external_host.to_owned(),
             provider,
@@ -215,6 +224,7 @@ impl Application {
             session_store,
             cookie_options,
             auth_header_cache: AuthHeaderCache::new(),
+            jwks_key_set,
         })
     }
 

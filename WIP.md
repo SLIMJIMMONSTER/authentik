@@ -71,7 +71,7 @@ management, header injection, reverse proxying, forward-auth protocols) is stubb
 - [x] `attempt_basic_auth()` → `application/auth_basic.rs`
 - [x] Special case: `goauthentik.io/token` username → delegates to `attempt_bearer_auth`
 - [x] `verify_id_token()` — HS256 JWT verification with issuer/audience validation → `application/auth_basic.rs`
-- [ ] RS256/JWKS verification (TODO in `verify_id_token`)
+- [x] RS256/JWKS verification → `application/jwks.rs` `RemoteJwksKeySet` with lazy fetch + cache, wired into `verify_id_token`
 
 ### OAuth Flow - Start (Go: `application/oauth.go`)
 - [x] `/outpost.goauthentik.io/start` route → `application/mod.rs` router + `handlers/mod.rs`

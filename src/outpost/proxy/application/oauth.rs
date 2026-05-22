@@ -394,6 +394,7 @@ impl Application {
         // Verify the access token as a JWT (in authentik it's a signed JWT).
         let mut claims = self
             .verify_id_token(&token_resp.access_token)
+            .await
             .ok_or_else(|| eyre!("failed to verify access token from code exchange"))?;
 
         if claims.ak_proxy.is_none() {
@@ -662,6 +663,10 @@ mod tests {
             },
             auth_header_cache: AuthHeaderCache::new(),
             upstream_client: reqwest::Client::new(),
+            jwks_key_set: crate::outpost::proxy::application::jwks::RemoteJwksKeySet::new(
+                String::new(),
+                reqwest_middleware::ClientWithMiddleware::default(),
+            ),
         }
     }
 

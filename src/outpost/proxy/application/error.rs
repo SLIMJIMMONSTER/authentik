@@ -150,6 +150,10 @@ mod tests {
                 max_age: 3600,
             },
             auth_header_cache: AuthHeaderCache::new(),
+            jwks_key_set: crate::outpost::proxy::application::jwks::RemoteJwksKeySet::new(
+                String::new(),
+                reqwest_middleware::ClientWithMiddleware::default(),
+            ),
         }
     }
 

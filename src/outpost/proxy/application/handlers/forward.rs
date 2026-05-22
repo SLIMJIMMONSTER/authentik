@@ -426,6 +426,10 @@ mod tests {
             },
             auth_header_cache: AuthHeaderCache::new(),
             upstream_client: reqwest::Client::new(),
+            jwks_key_set: crate::outpost::proxy::application::jwks::RemoteJwksKeySet::new(
+                String::new(),
+                reqwest_middleware::ClientWithMiddleware::default(),
+            ),
         }
     }
 

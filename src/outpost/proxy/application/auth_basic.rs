@@ -89,18 +89,19 @@ impl Application {
             .inspect_err(|err| warn!(?err, "failed to parse token response"))
             .ok()?;
 
-        self.verify_id_token(&token.id_token)
+        self.verify_id_token(&token.id_token).await
     }
 
     /// Verify an ID token JWT and extract claims.
     ///
     /// Uses HS256 with the client secret when the provider advertises HS256
-    /// support, otherwise falls back to RS256 (TODO: JWKS not yet implemented).
+    /// support, otherwise uses RS256 with keys fetched from the JWKS endpoint.
     ///
     /// Validates the issuer and audience (client_id).
-    pub(super) fn verify_id_token(&self, id_token: &str) -> Option<Claims> {
+    ///
+    /// Go reference: `tokenVerifier.Verify` in `application/application.go`.
+    pub(super) async fn verify_id_token(&self, id_token: &str) -> Option<Claims> {
         let client_id = self.provider.client_id.as_deref().unwrap_or_default();
-        let client_secret = self.provider.client_secret.as_deref().unwrap_or_default();
 
         let algs = &self
             .provider
@@ -108,27 +109,29 @@ impl Application {
             .id_token_signing_alg_values_supported;
         let uses_hs256 = algs.iter().any(|a| a == "HS256");
 
-        if !uses_hs256 {
-            // TODO: implement JWKS-based RS256 verification
-            warn!("RS256/JWKS verification not yet implemented, only HS256 is supported");
-            return None;
+        if uses_hs256 {
+            let client_secret = self.provider.client_secret.as_deref().unwrap_or_default();
+            let key = DecodingKey::from_secret(client_secret.as_bytes());
+            let mut validation = Validation::new(Algorithm::HS256);
+            validation.set_audience(&[client_id]);
+            validation.set_issuer(&[&self.endpoint.issuer]);
+
+            let token_data = decode::<Claims>(id_token, &key, &validation)
+                .inspect_err(|err| warn!(?err, "failed to verify HS256 ID token"))
+                .ok()?;
+
+            let mut claims = token_data.claims;
+            if claims.ak_proxy.is_none() {
+                claims.ak_proxy = Some(ProxyClaims::default());
+            }
+            claims.raw_token = id_token.to_owned();
+            Some(claims)
+        } else {
+            // RS256 via remote JWKS
+            self.jwks_key_set
+                .verify(id_token, &self.endpoint.issuer, client_id)
+                .await
         }
-
-        let key = DecodingKey::from_secret(client_secret.as_bytes());
-        let mut validation = Validation::new(Algorithm::HS256);
-        validation.set_audience(&[client_id]);
-        validation.set_issuer(&[&self.endpoint.issuer]);
-
-        let token_data = decode::<Claims>(id_token, &key, &validation)
-            .inspect_err(|err| warn!(?err, "failed to verify ID token"))
-            .ok()?;
-
-        let mut claims = token_data.claims;
-        if claims.ak_proxy.is_none() {
-            claims.ak_proxy = Some(ProxyClaims::default());
-        }
-        claims.raw_token = id_token.to_owned();
-        Some(claims)
     }
 }
 
@@ -290,11 +293,15 @@ mod tests {
             },
             auth_header_cache: AuthHeaderCache::new(),
             upstream_client: reqwest::Client::new(),
+            jwks_key_set: crate::outpost::proxy::application::jwks::RemoteJwksKeySet::new(
+                String::new(),
+                reqwest_middleware::ClientWithMiddleware::default(),
+            ),
         }
     }
 
-    #[test]
-    fn verify_valid_hs256_token() {
+    #[tokio::test]
+    async fn verify_valid_hs256_token() {
         init_crypto();
 
         let secret = "my-client-secret";
@@ -312,15 +319,15 @@ mod tests {
         let token = make_hs256_token(&claims, secret, issuer, client_id);
         let app = test_app_for_verification(secret, issuer, client_id);
 
-        let result = app.verify_id_token(&token).unwrap();
+        let result = app.verify_id_token(&token).await.unwrap();
         assert_eq!(result.sub, "user-1");
         assert_eq!(result.email, "user@example.com");
         assert_eq!(result.raw_token, token);
         assert!(result.ak_proxy.is_some());
     }
 
-    #[test]
-    fn verify_rejects_wrong_secret() {
+    #[tokio::test]
+    async fn verify_rejects_wrong_secret() {
         init_crypto();
 
         let issuer = "https://auth.example.com/application/o/test/";
@@ -335,11 +342,11 @@ mod tests {
         let token = make_hs256_token(&claims, "wrong-secret", issuer, client_id);
         let app = test_app_for_verification("correct-secret", issuer, client_id);
 
-        assert!(app.verify_id_token(&token).is_none());
+        assert!(app.verify_id_token(&token).await.is_none());
     }
 
-    #[test]
-    fn verify_rejects_wrong_issuer() {
+    #[tokio::test]
+    async fn verify_rejects_wrong_issuer() {
         init_crypto();
 
         let secret = "my-secret";
@@ -354,11 +361,11 @@ mod tests {
         let token = make_hs256_token(&claims, secret, "https://wrong-issuer.com/", client_id);
         let app = test_app_for_verification(secret, "https://correct-issuer.com/", client_id);
 
-        assert!(app.verify_id_token(&token).is_none());
+        assert!(app.verify_id_token(&token).await.is_none());
     }
 
-    #[test]
-    fn verify_rejects_expired_token() {
+    #[tokio::test]
+    async fn verify_rejects_expired_token() {
         init_crypto();
 
         let secret = "my-secret";
@@ -374,6 +381,6 @@ mod tests {
         let token = make_hs256_token(&claims, secret, issuer, client_id);
         let app = test_app_for_verification(secret, issuer, client_id);
 
-        assert!(app.verify_id_token(&token).is_none());
+        assert!(app.verify_id_token(&token).await.is_none());
     }
 }
