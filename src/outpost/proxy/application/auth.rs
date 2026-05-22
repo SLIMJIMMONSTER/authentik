@@ -409,6 +409,7 @@ mod tests {
                 max_age: 3600,
             },
             auth_header_cache: AuthHeaderCache::new(),
+            upstream_client: reqwest::Client::new(),
         }
     }
 

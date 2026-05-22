@@ -49,6 +49,10 @@ pub(super) struct Application {
     /// HTTP client for backchannel requests (token introspection, token exchange).
     /// Reused from the outpost controller's API configuration.
     pub(super) http_client: reqwest_middleware::ClientWithMiddleware,
+    /// HTTP client for upstream proxy requests.
+    /// Separate from `http_client` so it doesn't carry API middleware and can
+    /// have its own TLS validation settings (`internal_host_ssl_validation`).
+    pub(super) upstream_client: reqwest::Client,
     /// Server-side session store.
     pub(super) session_store: FilesystemStore,
     /// Cookie options for the session cookie.
@@ -148,6 +152,13 @@ impl Application {
             max_age,
         };
 
+        // Upstream HTTP client for proxy mode.
+        // Go reference: getUpstreamTransport() in mode_proxy.go
+        let ssl_validate = provider.internal_host_ssl_validation.unwrap_or(true);
+        let upstream_client = reqwest::Client::builder()
+            .danger_accept_invalid_certs(!ssl_validate)
+            .build()?;
+
         let router = Router::new()
             .route(
                 "/outpost.goauthentik.io/start",
@@ -195,6 +206,7 @@ impl Application {
             outpost_name,
             unauthenticated_regex,
             http_client: outpost.controller.api_config.client.clone(),
+            upstream_client,
             session_store,
             cookie_options,
             auth_header_cache: AuthHeaderCache::new(),
