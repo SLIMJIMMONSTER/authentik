@@ -3,11 +3,12 @@ use std::{collections::HashMap, sync::Arc};
 use ak_axum::router::wrap_router;
 use ak_client::{apis::outposts_api::outposts_proxy_list, models::ProxyMode};
 use ak_common::{
-    Tasks,
+    Arbiter, Tasks,
     api::fetch_all,
     config,
     tls::{self, store::CertificateStore},
 };
+use tokio::time::{Duration, interval};
 use arc_swap::ArcSwap;
 use argh::FromArgs;
 use axum::Router;
@@ -79,6 +80,15 @@ impl Outpost for ProxyOutpost {
                 rustls_config,
             )?;
         }
+
+        // Periodic session cleanup (every 5 minutes).
+        // Go reference: `CleanupManager` in `sessionstore/cleanup.go`
+        let outpost = Arc::clone(&self);
+        let arbiter = tasks.arbiter();
+        tasks
+            .build_task()
+            .name("proxy-outpost::session_cleanup")
+            .spawn(session_cleanup(arbiter, outpost))?;
 
         Ok(())
     }
@@ -226,6 +236,40 @@ impl ProxyOutpost {
 
         longest_match
     }
+}
+
+/// Periodic session cleanup task.
+///
+/// Runs `cleanup_expired` on each app's session store every 5 minutes,
+/// removing session files whose modification time exceeds `max_age`.
+///
+/// Go reference: `CleanupManager` in `sessionstore/cleanup.go`.
+async fn session_cleanup(arbiter: Arbiter, outpost: Arc<ProxyOutpost>) -> Result<()> {
+    const CLEANUP_INTERVAL: Duration = Duration::from_secs(5 * 60);
+
+    let mut ticker = interval(CLEANUP_INTERVAL);
+    // The first tick fires immediately — skip it so we don't clean up on startup.
+    ticker.tick().await;
+
+    loop {
+        tokio::select! {
+            _ = ticker.tick() => {
+                debug!("running session cleanup");
+                let apps = outpost.apps.load();
+                for app in apps.values() {
+                    if let Err(err) = app.session_store.cleanup_expired() {
+                        warn!(?err, provider = app.host, "session cleanup failed");
+                    }
+                }
+            }
+            () = arbiter.shutdown() => {
+                info!("stopping session cleanup task");
+                break;
+            }
+        }
+    }
+
+    Ok(())
 }
 
 fn build_router(outpost: Arc<ProxyOutpost>) -> Router {

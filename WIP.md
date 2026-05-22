@@ -47,7 +47,7 @@ management, header injection, reverse proxying, forward-auth protocols) is stubb
 - [x] `Logout()` - filter and delete sessions by predicate → `SessionStore::delete_matching`
 - [x] Filesystem session store (standalone outposts) → `application/session_filesystem.rs`
 - [ ] PostgreSQL session store (embedded outposts)
-- [ ] Session cleanup (expired session removal)
+- [x] Session cleanup (expired session removal) → `proxy/mod.rs` periodic task via `session_cleanup()`, runs `cleanup_expired()` every 5 min
 
 ### Authentication (Go: `application/auth.go`)
 - [x] `get_claims_from_session()` → `application/auth.rs`
@@ -132,9 +132,9 @@ management, header injection, reverse proxying, forward-auth protocols) is stubb
 - [x] Handle `SessionEnd` events: find and delete matching sessions across all apps → `proxy/mod.rs` end_session
 
 ### Auth Header Cache
-- [ ] TTL cache for Authorization header -> Claims (60s TTL)
-- [ ] Cache check in auth flow
-- [ ] Cache population on successful bearer/basic auth
+- [x] TTL cache for Authorization header -> Claims (60s TTL) → `application/auth.rs` AuthHeaderCache
+- [x] Cache check in auth flow → `application/auth.rs` check_auth
+- [x] Cache population on successful bearer/basic auth → `application/auth.rs` save_and_cache_claims
 
 ---
 
