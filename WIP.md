@@ -119,8 +119,8 @@ management, header injection, reverse proxying, forward-auth protocols) is stubb
 ### Reverse Proxy Handler (Go: `application/mode_proxy.go`)
 - [x] `handle()` (proxy mode) - check auth, add headers, reverse proxy to internal_host → `handlers/proxy.rs`
 - [x] Request modification: set X-Forwarded-Host, rewrite URL to upstream → `handlers/proxy.rs`
-- [ ] Per-user backend override (`claims.Proxy.BackendOverride`)
-- [ ] Per-user host header override (`claims.Proxy.HostHeader`)
+- [x] Per-user backend override (`claims.Proxy.BackendOverride`) → `handlers/proxy.rs`
+- [x] Per-user host header override (`claims.Proxy.HostHeader`) → `handlers/proxy.rs`
 - [x] Response modification: set `X-Powered-By` → `handlers/proxy.rs`
 - [ ] Upstream timing metrics (`authentik_outpost_proxy_upstream_response_duration_seconds`)
 - [ ] Error handler with error page rendering (detailed for superusers)
@@ -281,10 +281,12 @@ Implemented in `handlers/proxy.rs`:
 - 502 Bad Gateway on upstream failure or invalid `internal_host`
 - 12 tests (URL building, hop-by-hop filtering, integration tests with mock upstream)
 
-**Step 25: Per-user backend and host overrides**
-In the proxy handler, check `claims.Proxy.BackendOverride` to override the upstream URL and
-`claims.Proxy.HostHeader` to override the Host header sent upstream.
-Go reference: `internal/outpost/proxyv2/application/mode_proxy.go` proxyModifyRequest
+**Step 25: Per-user backend and host overrides** ✅
+Added to `handlers/proxy.rs`:
+- `backend_override`: parses as URL, overrides scheme/host/port of upstream URL
+- `host_header`: overrides the Host header sent to the upstream
+- Invalid backend_override URLs log a warning and fall back to default internal_host
+- 3 tests (backend override, host header override, invalid override fallback)
 
 **Step 26: Upstream timing metrics**
 Add the `authentik_outpost_proxy_upstream_response_duration_seconds` histogram. Record upstream

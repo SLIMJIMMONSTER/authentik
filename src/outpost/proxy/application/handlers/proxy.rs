@@ -136,10 +136,49 @@ pub(crate) async fn handle(
 
     // Build upstream URL from internal_host.
     let internal_host = app.provider.internal_host.as_deref().unwrap_or_default();
-    let Some(upstream_url) = build_upstream_url(internal_host, &uri) else {
+    let Some(mut upstream_url) = build_upstream_url(internal_host, &uri) else {
         warn!(internal_host, "failed to build upstream URL");
         return Ok(StatusCode::BAD_GATEWAY.into_response());
     };
+
+    // Per-user backend override: replace the upstream scheme + host.
+    // Go reference: proxyModifyRequest in application/mode_proxy.go
+    if let Some(ref claims) = auth.claims {
+        if let Some(ref proxy) = claims.ak_proxy {
+            if !proxy.backend_override.is_empty() {
+                match Url::parse(&proxy.backend_override) {
+                    Ok(override_url) => {
+                        trace!(
+                            backend_override = proxy.backend_override,
+                            "applying per-user backend override"
+                        );
+                        upstream_url
+                            .set_scheme(override_url.scheme())
+                            .unwrap_or(());
+                        upstream_url
+                            .set_host(override_url.host_str())
+                            .unwrap_or(());
+                        upstream_url.set_port(override_url.port()).unwrap_or(());
+                    }
+                    Err(err) => {
+                        warn!(
+                            ?err,
+                            backend_override = proxy.backend_override,
+                            "failed to parse backend override URL"
+                        );
+                    }
+                }
+            }
+
+            // Per-user Host header override.
+            // Go reference: proxyModifyRequest sets r.Host = claims.Proxy.HostHeader
+            if !proxy.host_header.is_empty() {
+                if let Ok(val) = proxy.host_header.parse() {
+                    fwd_headers.insert("host", val);
+                }
+            }
+        }
+    }
 
     // Forward request body as a stream.
     let body_stream = body.into_data_stream();
@@ -279,7 +318,7 @@ mod tests {
         CookieOptions, SameSite, SessionData, SessionStore,
     };
     use crate::outpost::proxy::application::session_filesystem::FilesystemStore;
-    use crate::outpost::proxy::application::types::Claims;
+    use crate::outpost::proxy::application::types::{Claims, ProxyClaims};
 
     fn test_app(store_dir: &std::path::Path, internal_host: &str) -> Application {
         let mut provider = ak_client::models::ProxyOutpostConfig::new(
@@ -538,5 +577,147 @@ mod tests {
         let response = handle(State(app), request).await.unwrap();
 
         assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    }
+
+    // -- Per-user override tests --
+
+    #[tokio::test]
+    async fn proxy_backend_override_changes_upstream() {
+        let dir = tempfile::tempdir().unwrap();
+        // Default backend (should NOT be used).
+        let (_, default_url) = start_echo_server().await;
+        // Override backend (should be used).
+        let (override_listener, override_url) = start_echo_server().await;
+        let app = Arc::new(test_app(dir.path(), &default_url));
+
+        tokio::spawn({
+            let router = axum::Router::new().fallback(echo_handler);
+            async move { axum::serve(override_listener, router).await.unwrap() }
+        });
+
+        let data = SessionData {
+            claims: Some(Claims {
+                sub: "user-1".to_owned(),
+                preferred_username: "alice".to_owned(),
+                ak_proxy: Some(ProxyClaims {
+                    backend_override: override_url.clone(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            redirect: None,
+        };
+        app.session_store
+            .save("override-sess", &data, 3600)
+            .await
+            .unwrap();
+
+        let request = Request::builder()
+            .uri("/api/check")
+            .header("Cookie", "authentik_proxy_test=override-sess")
+            .header("Host", "app.example.com")
+            .body(axum::body::Body::empty())
+            .unwrap();
+
+        let response = handle(State(app), request).await.unwrap();
+
+        // The request should have reached the override server, not the default.
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers().get("X-Test-Path").unwrap(), "/api/check");
+    }
+
+    #[tokio::test]
+    async fn proxy_host_header_override() {
+        let dir = tempfile::tempdir().unwrap();
+        let (listener, base_url) = start_echo_server().await;
+        let app = Arc::new(test_app(dir.path(), &base_url));
+
+        tokio::spawn({
+            let router = axum::Router::new().fallback(echo_handler);
+            async move { axum::serve(listener, router).await.unwrap() }
+        });
+
+        let data = SessionData {
+            claims: Some(Claims {
+                sub: "user-1".to_owned(),
+                preferred_username: "bob".to_owned(),
+                ak_proxy: Some(ProxyClaims {
+                    host_header: "custom-backend.internal".to_owned(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            redirect: None,
+        };
+        app.session_store
+            .save("host-sess", &data, 3600)
+            .await
+            .unwrap();
+
+        let request = Request::builder()
+            .uri("/test")
+            .header("Cookie", "authentik_proxy_test=host-sess")
+            .header("Host", "app.example.com")
+            .body(axum::body::Body::empty())
+            .unwrap();
+
+        let response = handle(State(app), request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        // The X-Forwarded-Host should still be the original host.
+        assert_eq!(
+            response.headers().get("X-Test-Forwarded-Host").unwrap(),
+            "app.example.com"
+        );
+        // The Host header sent to the upstream should be the override.
+        assert_eq!(
+            response.headers().get("X-Test-Host").unwrap(),
+            "custom-backend.internal"
+        );
+    }
+
+    #[tokio::test]
+    async fn proxy_invalid_backend_override_uses_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let (listener, base_url) = start_echo_server().await;
+        let app = Arc::new(test_app(dir.path(), &base_url));
+
+        tokio::spawn({
+            let router = axum::Router::new().fallback(echo_handler);
+            async move { axum::serve(listener, router).await.unwrap() }
+        });
+
+        let data = SessionData {
+            claims: Some(Claims {
+                sub: "user-1".to_owned(),
+                preferred_username: "charlie".to_owned(),
+                ak_proxy: Some(ProxyClaims {
+                    backend_override: "not-a-valid-url".to_owned(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            redirect: None,
+        };
+        app.session_store
+            .save("bad-override-sess", &data, 3600)
+            .await
+            .unwrap();
+
+        let request = Request::builder()
+            .uri("/fallback")
+            .header("Cookie", "authentik_proxy_test=bad-override-sess")
+            .header("Host", "app.example.com")
+            .body(axum::body::Body::empty())
+            .unwrap();
+
+        let response = handle(State(app), request).await.unwrap();
+
+        // Should still work — falls back to default internal_host.
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get("X-Test-Path").unwrap(),
+            "/fallback"
+        );
     }
 }
