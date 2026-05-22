@@ -117,11 +117,11 @@ management, header injection, reverse proxying, forward-auth protocols) is stubb
 - [x] All: allowlist check before requiring auth → `handlers/forward.rs`
 
 ### Reverse Proxy Handler (Go: `application/mode_proxy.go`)
-- [ ] `handle()` (proxy mode) - check auth, add headers, reverse proxy to internal_host
-- [ ] Request modification: set X-Forwarded-Host, rewrite URL to upstream
+- [x] `handle()` (proxy mode) - check auth, add headers, reverse proxy to internal_host → `handlers/proxy.rs`
+- [x] Request modification: set X-Forwarded-Host, rewrite URL to upstream → `handlers/proxy.rs`
 - [ ] Per-user backend override (`claims.Proxy.BackendOverride`)
 - [ ] Per-user host header override (`claims.Proxy.HostHeader`)
-- [ ] Response modification: set `X-Powered-By`
+- [x] Response modification: set `X-Powered-By` → `handlers/proxy.rs`
 - [ ] Upstream timing metrics (`authentik_outpost_proxy_upstream_response_duration_seconds`)
 - [ ] Error handler with error page rendering (detailed for superusers)
 
@@ -271,11 +271,15 @@ Implemented all forward auth handlers in `handlers/forward.rs`:
 
 ### Phase 8: Reverse Proxy
 
-**Step 24: Basic reverse proxy**
-Implement the proxy mode `handle()`: check auth (redirect to start if unauthenticated and not
-allowlisted), add headers, reverse proxy the request to `internal_host`. Use `hyper` or
-`reqwest` for the upstream request. Set `X-Forwarded-Host`. Add `X-Powered-By` to response.
-Go reference: `internal/outpost/proxyv2/application/mode_proxy.go`
+**Step 24: Basic reverse proxy** ✅
+Implemented in `handlers/proxy.rs`:
+- Auth check → redirect to `/start` if unauthenticated, allowlist bypass
+- `build_upstream_url()` rewrites URL to `internal_host` + original path/query
+- `upstream_client: reqwest::Client` on Application with `internal_host_ssl_validation` support
+- Hop-by-hop header filtering, `X-Forwarded-Host`, `X-Powered-By` on response
+- Streaming request/response bodies via `reqwest::Body::wrap_stream` / `Body::from_stream`
+- 502 Bad Gateway on upstream failure or invalid `internal_host`
+- 12 tests (URL building, hop-by-hop filtering, integration tests with mock upstream)
 
 **Step 25: Per-user backend and host overrides**
 In the proxy handler, check `claims.Proxy.BackendOverride` to override the upstream URL and
