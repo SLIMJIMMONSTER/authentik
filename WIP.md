@@ -129,7 +129,7 @@ management, header injection, reverse proxying, forward-auth protocols) is stubb
 - [x] `report_misconfiguration()` - POST configuration error event to authentik API → `application/misconfiguration.rs`
 
 ### Session End via WebSocket (Go: `ws.go`)
-- [ ] Handle `SessionEnd` events: find and delete matching sessions across all apps
+- [x] Handle `SessionEnd` events: find and delete matching sessions across all apps → `proxy/mod.rs` end_session
 
 ### Auth Header Cache
 - [ ] TTL cache for Authorization header -> Claims (60s TTL)
@@ -311,10 +311,11 @@ Implemented in `application/misconfiguration.rs`:
 - Wired into forward auth handlers: traefik/caddy, nginx, envoy all report misconfigurations on URL parsing failure
 - 2 tests (cleanse_headers basic, empty)
 
-**Step 29: Session end via WebSocket**
-Wire up the `SessionEnd` event handler in `end_session()`: iterate all apps, call `Logout()` with
-a filter matching the session ID from the event.
-Go reference: `internal/outpost/proxyv2/ws.go`
+**Step 29: Session end via WebSocket** ✅
+Implemented `ProxyOutpost::end_session()` in `proxy/mod.rs`:
+- On `SessionEnd` event, iterates all apps and calls `delete_matching` with `c.sid == session_id` filter
+- Added `EventSessionEnd::session_id()` accessor in `event.rs`
+- 1 test (delete_matching by sid in session_filesystem.rs)
 
 **Step 30: Intercept header auth**
 In `redirect_to_start()`, when `intercept_header_auth` is enabled and the request has an

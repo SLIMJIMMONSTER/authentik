@@ -56,6 +56,12 @@ pub(crate) struct EventSessionEnd {
     session_id: String,
 }
 
+impl EventSessionEnd {
+    pub(crate) fn session_id(&self) -> &str {
+        &self.session_id
+    }
+}
+
 fn build_ws_url(mut url: Url, outpost_pk: &str, instance_uuid: &str, attempt: u32) -> Result<Url> {
     let ws_scheme = match url.scheme() {
         "https" => "wss",

@@ -256,6 +256,39 @@ mod tests {
         assert!(store.load("sess-b").await.unwrap().is_some());
     }
 
+    #[tokio::test]
+    async fn delete_matching_filters_by_sid() {
+        let (_dir, store) = temp_store();
+
+        let data_a = SessionData {
+            claims: Some(Claims {
+                sub: "user-a".to_owned(),
+                sid: "session-123".to_owned(),
+                ..Default::default()
+            }),
+            redirect: None,
+        };
+        let data_b = SessionData {
+            claims: Some(Claims {
+                sub: "user-a".to_owned(),
+                sid: "session-456".to_owned(),
+                ..Default::default()
+            }),
+            redirect: None,
+        };
+        store.save("sess-a", &data_a, 3600).await.unwrap();
+        store.save("sess-b", &data_b, 3600).await.unwrap();
+
+        // Delete only the session with sid "session-123" (same filter as end_session uses).
+        store
+            .delete_matching(&|c: &Claims| c.sid == "session-123")
+            .await
+            .unwrap();
+
+        assert!(store.load("sess-a").await.unwrap().is_none());
+        assert!(store.load("sess-b").await.unwrap().is_some());
+    }
+
     #[test]
     fn cleanup_expired_removes_old_files() {
         let dir = tempfile::tempdir().unwrap();

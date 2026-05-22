@@ -21,6 +21,7 @@ use rustls::{
 use tracing::{debug, error, info, instrument, warn};
 
 use crate::outpost::{Outpost, OutpostController, proxy::application::Application};
+use crate::outpost::proxy::application::session::SessionStore as _;
 
 mod application;
 mod handlers;
@@ -143,9 +144,19 @@ impl Outpost for ProxyOutpost {
         Ok(())
     }
 
-    async fn end_session(&self, _event: super::event::EventSessionEnd) -> Result<()> {
-        // todo!()
-        warn!(?_event, "removing session");
+    async fn end_session(&self, event: super::event::EventSessionEnd) -> Result<()> {
+        let session_id = event.session_id();
+        let apps = self.apps.load();
+        for app in apps.values() {
+            debug!(provider = app.host, "logging out session");
+            if let Err(err) = app
+                .session_store
+                .delete_matching(&|c| c.sid == session_id)
+                .await
+            {
+                warn!(?err, provider = app.host, "failed to logout session");
+            }
+        }
         Ok(())
     }
 }
