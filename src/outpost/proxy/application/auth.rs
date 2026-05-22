@@ -272,6 +272,7 @@ mod tests {
 
     use super::*;
     use crate::outpost::proxy::application::session::SessionStore;
+    use crate::outpost::proxy::application::session::AnySessionStore;
     use crate::outpost::proxy::application::session_filesystem::FilesystemStore;
 
     fn make_headers(cookie_name: &str, session_id: &str) -> HeaderMap {
@@ -400,7 +401,7 @@ mod tests {
             http_client: reqwest_middleware::ClientWithMiddleware::default(),
             public_http_client: reqwest_middleware::ClientWithMiddleware::default(),
             api_config: ak_client::apis::configuration::Configuration::default(),
-            session_store: FilesystemStore::new(store_dir.to_owned(), 3600).unwrap(),
+            session_store: AnySessionStore::Filesystem(FilesystemStore::new(store_dir.to_owned(), 3600).unwrap()),
             cookie_options: CookieOptions {
                 name: session_name.to_owned(),
                 domain: String::new(),

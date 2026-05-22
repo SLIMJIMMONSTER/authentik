@@ -599,7 +599,9 @@ mod tests {
     use super::*;
     use crate::outpost::proxy::application::auth::AuthHeaderCache;
     use crate::outpost::proxy::application::endpoint::OIDCEndpoint;
-    use crate::outpost::proxy::application::session::{CookieOptions, SameSite, SessionStore};
+    use crate::outpost::proxy::application::session::{
+        AnySessionStore, CookieOptions, SameSite, SessionStore,
+    };
     use crate::outpost::proxy::application::session_filesystem::FilesystemStore;
 
     fn test_app(store_dir: &std::path::Path, mode: ProxyMode) -> Application {
@@ -652,7 +654,7 @@ mod tests {
             http_client: reqwest_middleware::ClientWithMiddleware::default(),
             public_http_client: reqwest_middleware::ClientWithMiddleware::default(),
             api_config: ak_client::apis::configuration::Configuration::default(),
-            session_store: FilesystemStore::new(store_dir.to_owned(), 3600).unwrap(),
+            session_store: AnySessionStore::Filesystem(FilesystemStore::new(store_dir.to_owned(), 3600).unwrap()),
             cookie_options: CookieOptions {
                 name: "authentik_proxy_test".to_owned(),
                 domain: String::new(),

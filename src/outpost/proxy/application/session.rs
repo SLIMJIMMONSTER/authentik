@@ -2,6 +2,9 @@ use axum::http::{HeaderMap, header::COOKIE};
 use eyre::Result;
 use serde::{Deserialize, Serialize};
 
+use super::session_filesystem::FilesystemStore;
+#[cfg(feature = "core")]
+use super::session_postgres::PostgresStore;
 use super::types::Claims;
 
 /// Data stored in a session.
@@ -94,6 +97,65 @@ pub(crate) trait SessionStore: Send + Sync + std::fmt::Debug {
         &self,
         predicate: &(dyn Fn(&Claims) -> bool + Send + Sync),
     ) -> impl Future<Output = Result<()>> + Send;
+}
+
+/// Runtime-polymorphic session store.
+///
+/// Wraps either a [`FilesystemStore`] (standalone) or a [`PostgresStore`]
+/// (embedded) depending on the outpost deployment mode.
+#[derive(Debug)]
+pub(crate) enum AnySessionStore {
+    Filesystem(FilesystemStore),
+    #[cfg(feature = "core")]
+    Postgres(PostgresStore),
+}
+
+impl SessionStore for AnySessionStore {
+    async fn load(&self, session_id: &str) -> Result<Option<SessionData>> {
+        match self {
+            Self::Filesystem(s) => s.load(session_id).await,
+            #[cfg(feature = "core")]
+            Self::Postgres(s) => s.load(session_id).await,
+        }
+    }
+
+    async fn save(&self, session_id: &str, data: &SessionData, max_age: i64) -> Result<()> {
+        match self {
+            Self::Filesystem(s) => s.save(session_id, data, max_age).await,
+            #[cfg(feature = "core")]
+            Self::Postgres(s) => s.save(session_id, data, max_age).await,
+        }
+    }
+
+    async fn delete(&self, session_id: &str) -> Result<()> {
+        match self {
+            Self::Filesystem(s) => s.delete(session_id).await,
+            #[cfg(feature = "core")]
+            Self::Postgres(s) => s.delete(session_id).await,
+        }
+    }
+
+    async fn delete_matching(
+        &self,
+        predicate: &(dyn Fn(&Claims) -> bool + Send + Sync),
+    ) -> Result<()> {
+        match self {
+            Self::Filesystem(s) => s.delete_matching(predicate).await,
+            #[cfg(feature = "core")]
+            Self::Postgres(s) => s.delete_matching(predicate).await,
+        }
+    }
+}
+
+impl AnySessionStore {
+    /// Remove expired sessions from the store.
+    pub(crate) async fn cleanup_expired(&self) -> Result<()> {
+        match self {
+            Self::Filesystem(s) => s.cleanup_expired(),
+            #[cfg(feature = "core")]
+            Self::Postgres(s) => s.cleanup_expired().await,
+        }
+    }
 }
 
 /// Extract the session ID from the request cookies.

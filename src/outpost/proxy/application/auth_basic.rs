@@ -232,7 +232,7 @@ mod tests {
     fn test_app_for_verification(secret: &str, issuer: &str, client_id: &str) -> Application {
         use crate::outpost::proxy::application::auth::AuthHeaderCache;
         use crate::outpost::proxy::application::endpoint::OIDCEndpoint;
-        use crate::outpost::proxy::application::session::{CookieOptions, SameSite};
+        use crate::outpost::proxy::application::session::{AnySessionStore, CookieOptions, SameSite};
         use crate::outpost::proxy::application::session_filesystem::FilesystemStore;
 
         let dir = std::env::temp_dir();
@@ -282,7 +282,7 @@ mod tests {
             http_client: reqwest_middleware::ClientWithMiddleware::default(),
             public_http_client: reqwest_middleware::ClientWithMiddleware::default(),
             api_config: ak_client::apis::configuration::Configuration::default(),
-            session_store: FilesystemStore::new(dir, 3600).unwrap(),
+            session_store: AnySessionStore::Filesystem(FilesystemStore::new(dir, 3600).unwrap()),
             cookie_options: CookieOptions {
                 name: "authentik_proxy_test".to_owned(),
                 domain: String::new(),

@@ -14,6 +14,7 @@ use self::auth::AuthHeaderCache;
 use self::endpoint::{OIDCEndpoint, get_oidc_endpoint};
 use self::jwks::RemoteJwksKeySet;
 use self::session::{CookieOptions, SameSite};
+use self::session::AnySessionStore;
 use self::session_filesystem::FilesystemStore;
 
 pub(super) mod auth;
@@ -30,6 +31,8 @@ pub(super) mod oauth;
 pub(crate) mod oauth_state;
 pub(crate) mod session;
 pub(crate) mod session_filesystem;
+#[cfg(feature = "core")]
+pub(crate) mod session_postgres;
 pub(crate) mod types;
 
 #[derive(Debug)]
@@ -67,7 +70,7 @@ pub(super) struct Application {
     /// have its own TLS validation settings (`internal_host_ssl_validation`).
     pub(super) upstream_client: reqwest::Client,
     /// Server-side session store.
-    pub(super) session_store: FilesystemStore,
+    pub(super) session_store: AnySessionStore,
     /// Cookie options for the session cookie.
     pub(super) cookie_options: CookieOptions,
     /// In-memory TTL cache for Authorization header → Claims.
@@ -155,7 +158,20 @@ impl Application {
             .access_token_validity
             .map(|v| v as i64 + 1)
             .unwrap_or(0);
-        let session_store = FilesystemStore::new(std::env::temp_dir(), max_age)?;
+        let session_store = if outpost.controller.is_embedded() {
+            #[cfg(feature = "core")]
+            {
+                AnySessionStore::Postgres(session_postgres::PostgresStore::new(
+                    ak_common::db::get().clone(),
+                ))
+            }
+            #[cfg(not(feature = "core"))]
+            {
+                unreachable!("embedded mode requires the 'core' feature")
+            }
+        } else {
+            AnySessionStore::Filesystem(FilesystemStore::new(std::env::temp_dir(), max_age)?)
+        };
         let external_secure = external_url.scheme() == "https";
         let cookie_options = CookieOptions {
             name: session_name.clone(),

@@ -46,7 +46,7 @@ management, header injection, reverse proxying, forward-auth protocols) is stubb
 - [x] Cookie parsing and Set-Cookie building → `application/session.rs` helpers
 - [x] `Logout()` - filter and delete sessions by predicate → `SessionStore::delete_matching`
 - [x] Filesystem session store (standalone outposts) → `application/session_filesystem.rs`
-- [ ] PostgreSQL session store (embedded outposts)
+- [x] PostgreSQL session store (embedded outposts) → `application/session_postgres.rs` PostgresStore, `session.rs` AnySessionStore enum dispatch, wired into Application::new with embedded mode detection
 - [x] Session cleanup (expired session removal) → `proxy/mod.rs` periodic task via `session_cleanup()`, runs `cleanup_expired()` every 5 min
 
 ### Authentication (Go: `application/auth.go`)

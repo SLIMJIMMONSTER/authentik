@@ -257,7 +257,7 @@ async fn session_cleanup(arbiter: Arbiter, outpost: Arc<ProxyOutpost>) -> Result
                 debug!("running session cleanup");
                 let apps = outpost.apps.load();
                 for app in apps.values() {
-                    if let Err(err) = app.session_store.cleanup_expired() {
+                    if let Err(err) = app.session_store.cleanup_expired().await {
                         warn!(?err, provider = app.host, "session cleanup failed");
                     }
                 }

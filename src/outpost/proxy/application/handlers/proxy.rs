@@ -335,7 +335,7 @@ mod tests {
     use crate::outpost::proxy::application::auth::AuthHeaderCache;
     use crate::outpost::proxy::application::endpoint::OIDCEndpoint;
     use crate::outpost::proxy::application::session::{
-        CookieOptions, SameSite, SessionData, SessionStore,
+        AnySessionStore, CookieOptions, SameSite, SessionData, SessionStore,
     };
     use crate::outpost::proxy::application::session_filesystem::FilesystemStore;
     use crate::outpost::proxy::application::types::{Claims, ProxyClaims};
@@ -389,7 +389,7 @@ mod tests {
             public_http_client: reqwest_middleware::ClientWithMiddleware::default(),
             api_config: ak_client::apis::configuration::Configuration::default(),
             upstream_client: reqwest::Client::new(),
-            session_store: FilesystemStore::new(store_dir.to_owned(), 3600).unwrap(),
+            session_store: AnySessionStore::Filesystem(FilesystemStore::new(store_dir.to_owned(), 3600).unwrap()),
             cookie_options: CookieOptions {
                 name: "authentik_proxy_test".to_owned(),
                 domain: String::new(),
