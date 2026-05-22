@@ -131,7 +131,11 @@ pub(crate) async fn handle(
                 Ok(resp)
             }
             RedirectToStartResult::Unauthorized => {
-                Ok(StatusCode::UNAUTHORIZED.into_response())
+                Ok(crate::outpost::proxy::application::error::render_error_response(
+                    StatusCode::UNAUTHORIZED,
+                    "Unauthenticated",
+                    "Due to 'Receive header authentication' being set, no redirect is performed.",
+                ))
             }
         };
     }
@@ -536,6 +540,31 @@ mod tests {
         // not directly to the authorization endpoint.
         assert!(location.contains("/outpost.goauthentik.io/start"));
         assert!(location.contains("rd="));
+    }
+
+    #[tokio::test]
+    async fn proxy_intercept_header_auth_returns_401_error_page() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = test_app(dir.path(), "http://localhost:1");
+        app.provider.intercept_header_auth = Some(true);
+        let app = Arc::new(app);
+
+        let request = Request::builder()
+            .uri("/api/data")
+            .header("Host", "app.example.com")
+            .header("Authorization", "Bearer some-token")
+            .body(axum::body::Body::empty())
+            .unwrap();
+
+        let response = handle(State(app), request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let html = String::from_utf8_lossy(&body);
+        assert!(html.contains("Unauthenticated"));
+        assert!(html.contains("no redirect is performed"));
     }
 
     #[tokio::test]

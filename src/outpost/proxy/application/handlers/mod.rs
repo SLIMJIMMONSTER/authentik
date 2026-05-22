@@ -191,7 +191,11 @@ pub(super) async fn handle_sign_out(
                     Ok(response)
                 }
                 crate::outpost::proxy::application::oauth::RedirectToStartResult::Unauthorized => {
-                    Ok(StatusCode::UNAUTHORIZED.into_response())
+                    Ok(crate::outpost::proxy::application::error::render_error_response(
+                        StatusCode::UNAUTHORIZED,
+                        "Unauthenticated",
+                        "Due to 'Receive header authentication' being set, no redirect is performed.",
+                    ))
                 }
             }
         }

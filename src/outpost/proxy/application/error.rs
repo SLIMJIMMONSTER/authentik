@@ -30,6 +30,16 @@ fn html_escape(s: &str) -> String {
         .replace('\'', "&#x27;")
 }
 
+/// Render an error page response with a given status code, title, and message.
+pub(super) fn render_error_response(
+    status: StatusCode,
+    title: &str,
+    message: &str,
+) -> Response {
+    let html = render_error_html(title, message);
+    (status, Html(html)).into_response()
+}
+
 impl Application {
     /// Return an error page response.
     ///
@@ -48,8 +58,7 @@ impl Application {
             "Failed to connect to backend.".to_owned()
         };
 
-        let html = render_error_html("Bad Gateway", &message);
-        (StatusCode::BAD_GATEWAY, Html(html)).into_response()
+        render_error_response(StatusCode::BAD_GATEWAY, "Bad Gateway", &message)
     }
 }
 

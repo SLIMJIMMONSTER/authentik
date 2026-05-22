@@ -317,7 +317,8 @@ Implemented `ProxyOutpost::end_session()` in `proxy/mod.rs`:
 - Added `EventSessionEnd::session_id()` accessor in `event.rs`
 - 1 test (delete_matching by sid in session_filesystem.rs)
 
-**Step 30: Intercept header auth**
-In `redirect_to_start()`, when `intercept_header_auth` is enabled and the request has an
-Authorization header, return 401 with error page instead of redirecting.
-Go reference: `internal/outpost/proxyv2/application/oauth.go` redirectToStart
+**Step 30: Intercept header auth** ✅
+Updated `Unauthorized` responses in `handlers/proxy.rs` and `handlers/mod.rs` to render the
+error page HTML (title "Unauthenticated", message about receive header authentication) instead
+of returning a bare 401 status. Added `render_error_response()` to `error.rs` for flexible
+status/title/message rendering. 1 test (proxy intercept header auth returns 401 with HTML).
