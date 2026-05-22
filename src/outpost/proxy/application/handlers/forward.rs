@@ -184,11 +184,11 @@ async fn redirect_to_auth_start(
 /// Go reference: `forwardHandleTraefik` / `forwardHandleCaddy` in `application/mode_forward.go`.
 async fn handle_traefik_caddy(app: &Application, headers: HeaderMap) -> Response {
     let Some(fwd) = get_traefik_forward_url(&headers) else {
-        warn!(
-            outpost = app.outpost_name,
-            provider = app.provider.name,
-            "failed to detect forward URL"
+        let msg = format!(
+            "Outpost {} (Provider {}) failed to detect a forward URL from Traefik/Caddy",
+            app.outpost_name, app.provider.name,
         );
+        app.report_misconfiguration(&msg, &headers, "").await;
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     };
 
@@ -277,11 +277,12 @@ pub(crate) async fn handle_envoy(
     let headers = request.headers().clone();
 
     let Some(fwd) = get_envoy_forward_url(&request) else {
-        warn!(
-            outpost = app.outpost_name,
-            provider = app.provider.name,
-            "failed to detect envoy forward URL"
+        let msg = format!(
+            "Outpost {} (Provider {}) failed to detect a forward URL from Envoy",
+            app.outpost_name, app.provider.name,
         );
+        app.report_misconfiguration(&msg, &headers, request.uri().to_string().as_str())
+            .await;
         return Ok(StatusCode::INTERNAL_SERVER_ERROR.into_response());
     };
 
@@ -312,11 +313,12 @@ pub(crate) async fn handle_nginx(
     let headers = request.headers();
 
     let Some(fwd) = get_nginx_forward_url(headers) else {
-        warn!(
-            outpost = app.outpost_name,
-            provider = app.provider.name,
-            "failed to detect nginx forward URL"
+        let msg = format!(
+            "Outpost {} (Provider {}) failed to detect a forward URL from nginx",
+            app.outpost_name, app.provider.name,
         );
+        app.report_misconfiguration(&msg, headers, request.uri().to_string().as_str())
+            .await;
         return Ok(StatusCode::INTERNAL_SERVER_ERROR.into_response());
     };
 
@@ -411,6 +413,7 @@ mod tests {
             outpost_name: "test-outpost".to_owned(),
             unauthenticated_regex: vec![regex::Regex::new("/health").unwrap()],
             http_client: reqwest_middleware::ClientWithMiddleware::default(),
+            api_config: ak_client::apis::configuration::Configuration::default(),
             session_store: FilesystemStore::new(store_dir.to_owned(), 3600).unwrap(),
             cookie_options: CookieOptions {
                 name: "authentik_proxy_test".to_owned(),

@@ -201,6 +201,7 @@ mod tests {
             outpost_name: "my-outpost".to_owned(),
             unauthenticated_regex: Vec::new(),
             http_client: reqwest_middleware::ClientWithMiddleware::default(),
+            api_config: ak_client::apis::configuration::Configuration::default(),
             session_store: FilesystemStore::new(store_dir.to_owned(), 3600).unwrap(),
             cookie_options: CookieOptions {
                 name: "authentik_proxy_test".to_owned(),

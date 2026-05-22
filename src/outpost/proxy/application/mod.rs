@@ -22,6 +22,7 @@ pub(crate) mod endpoint;
 pub(super) mod error;
 pub(super) mod handlers;
 pub(super) mod headers;
+pub(super) mod misconfiguration;
 pub(super) mod oauth;
 pub(crate) mod oauth_state;
 pub(crate) mod session;
@@ -50,6 +51,8 @@ pub(super) struct Application {
     /// HTTP client for backchannel requests (token introspection, token exchange).
     /// Reused from the outpost controller's API configuration.
     pub(super) http_client: reqwest_middleware::ClientWithMiddleware,
+    /// Full API configuration for calling the authentik API (e.g. event creation).
+    pub(super) api_config: ak_client::apis::configuration::Configuration,
     /// HTTP client for upstream proxy requests.
     /// Separate from `http_client` so it doesn't carry API middleware and can
     /// have its own TLS validation settings (`internal_host_ssl_validation`).
@@ -207,6 +210,7 @@ impl Application {
             outpost_name,
             unauthenticated_regex,
             http_client: outpost.controller.api_config.client.clone(),
+            api_config: outpost.controller.api_config.clone(),
             upstream_client,
             session_store,
             cookie_options,

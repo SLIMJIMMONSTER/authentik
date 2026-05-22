@@ -126,7 +126,7 @@ management, header injection, reverse proxying, forward-auth protocols) is stubb
 - [x] Error handler with error page rendering (detailed for superusers) → `application/error.rs`
 
 ### Misconfiguration Reporting (Go: `application/mode_common.go`)
-- [ ] `report_misconfiguration()` - POST configuration error event to authentik API
+- [x] `report_misconfiguration()` - POST configuration error event to authentik API → `application/misconfiguration.rs`
 
 ### Session End via WebSocket (Go: `ws.go`)
 - [ ] Handle `SessionEnd` events: find and delete matching sessions across all apps
@@ -303,10 +303,13 @@ Implemented in `application/error.rs` + `application/templates/error.html`:
 - Wired into proxy handler: upstream failures now return styled 502 error page
 - 7 tests (template rendering, XSS escaping, superuser/regular/no-claims/no-proxy-claims)
 
-**Step 28: Misconfiguration reporting**
-Implement `report_misconfiguration()` to POST a `configuration_error` event to the authentik
-events API when forward-auth headers are missing.
-Go reference: `internal/outpost/proxyv2/application/mode_common.go` ReportMisconfiguration
+**Step 28: Misconfiguration reporting** ✅
+Implemented in `application/misconfiguration.rs`:
+- `Application::report_misconfiguration()` — logs error and POSTs `configuration_error` event via `events_events_create` API
+- `cleanse_headers()` — flattens `HeaderMap` to `HashMap<String, String>` for event context
+- Added `api_config: Configuration` field to `Application` for API calls
+- Wired into forward auth handlers: traefik/caddy, nginx, envoy all report misconfigurations on URL parsing failure
+- 2 tests (cleanse_headers basic, empty)
 
 **Step 29: Session end via WebSocket**
 Wire up the `SessionEnd` event handler in `end_session()`: iterate all apps, call `Logout()` with
