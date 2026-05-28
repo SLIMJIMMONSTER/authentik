@@ -84,26 +84,30 @@ class EndSessionView(PolicyAccessView):
                     "id_token_hint_decode_failed"
                 ) from None
 
-        # Validate post_logout_redirect_uri against registered URIs
         if request_redirect_uri:
-            # OIDC Certification: id_token_hint required with post_logout_redirect_uri
-            if not id_token_hint:
-                raise TokenError("invalid_request").with_cause("id_token_hint_missing")
-            if urlparse(request_redirect_uri).scheme in FORBIDDEN_URI_SCHEMES:
-                raise TokenError("invalid_request").with_cause("post_logout_redirect_uri")
-            for allowed in self.provider.post_logout_redirect_uris:
-                if allowed.matching_mode == RedirectURIMatchingMode.STRICT:
-                    if request_redirect_uri == allowed.url:
-                        self.post_logout_redirect_uri = request_redirect_uri
-                        break
-                elif allowed.matching_mode == RedirectURIMatchingMode.REGEX:
-                    if fullmatch(allowed.url, request_redirect_uri):
-                        self.post_logout_redirect_uri = request_redirect_uri
-                        break
-            # OIDC Certification: OP MUST NOT perform post-logout redirection
-            # if the supplied URI does not exactly match a registered one
-            if self.post_logout_redirect_uri is None:
-                raise TokenError("invalid_request").with_cause("invalid_post_logout_redirect_uri")
+            # Only validate if we have a saved post logout redirect uri.
+            # Otherwise, just log them out
+            if self.provider.post_logout_redirect_uris:
+                # OIDC Certification: id_token_hint required with post_logout_redirect_uri
+                if not id_token_hint:
+                    raise TokenError("invalid_request").with_cause("id_token_hint_missing")
+                if urlparse(request_redirect_uri).scheme in FORBIDDEN_URI_SCHEMES:
+                    raise TokenError("invalid_request").with_cause("post_logout_redirect_uri")
+                for allowed in self.provider.post_logout_redirect_uris:
+                    if allowed.matching_mode == RedirectURIMatchingMode.STRICT:
+                        if request_redirect_uri == allowed.url:
+                            self.post_logout_redirect_uri = request_redirect_uri
+                            break
+                    elif allowed.matching_mode == RedirectURIMatchingMode.REGEX:
+                        if fullmatch(allowed.url, request_redirect_uri):
+                            self.post_logout_redirect_uri = request_redirect_uri
+                            break
+                # OIDC Certification: OP MUST NOT perform post-logout redirection
+                # if the supplied URI does not exactly match a registered one
+                if self.post_logout_redirect_uri is None:
+                    raise TokenError("invalid_request").with_cause(
+                        "invalid_post_logout_redirect_uri"
+                    )
 
         # Append state to the redirect URI if both are present
         if self.post_logout_redirect_uri and state:
